@@ -1,0 +1,47 @@
+# configs/scope.yaml
+#
+# Implements: Section 3 (scope.yaml), Section 10.1 (VDP tier cap),
+# Section 10.3 (rate limiting), R-L7 (race_parallel single source),
+# R-H4 (credential_validation_allowlist)
+# Blueprint: bb_agent_v6.6_final_blueprint.md
+#
+# TEMPLATE -- replace scope_domains with the actual authorized program
+# scope before running any live session against a real target. This file
+# is the single input to core/governance/scope_config_generator.py
+# (the "scope_json_gen" preflight check), which derives
+# services/scope_allowed.json for both Go services.
+#
+# WEEK 0 NOTE: Week 0 code only reads `scope_domains` (the generator's
+# only input). program_type, race_parallel, credential_validation_allowlist,
+# and rate_limit_per_host are included now as one coherent file -- matching
+# how Section 3 documents this file as a single block -- rather than being
+# added key-by-key as their owning weeks (2, 7, 6) land. This is a config
+# data file, not executable behavior, so it isn't "building ahead" in the
+# sense the Engineering Constitution means to forbid; flag if you'd rather
+# it were trimmed to Week-0-only keys.
+
+program_type: "bug_bounty"   # "bug_bounty" | "vdp" -- Section 10.1.
+                              # bug_bounty: max_tier = TIER_C.
+                              # vdp:        max_tier = TIER_B (safety_gate.py enforces, Week 2).
+
+scope_domains:                 # wildcard-aware (Section 4.4 / 10.8):
+                                # "*.example.com" matches example.com AND any subdomain.
+  - "*.example.com"
+  - "example.com"
+
+race_parallel: 30              # (R-L7 fix) AUTHORITATIVE SOURCE for race_scanner.py's
+                                # concurrency (Week 7). Default 30; reduce to 5-10 for
+                                # rate-sensitive targets. NOT duplicated in config.py.
+
+rate_limit_per_host: 10        # req/sec/host -- Section 10.3: "Default: 10 req/sec/host
+                                # (configurable in scope.yaml)". Enforced by
+                                # RateLimitedClient (Week 5).
+
+credential_validation_allowlist:   # (R-H4 fix) -- hardcoded_credentials.py only (Week 7)
+  enabled: true                    # false -> skip external validation; mark finding TIER_D
+  external_apis:                   # GET-only, read-only
+    - "sts.amazonaws.com"          # AWS key validation
+    - "api.stripe.com"             # Stripe key validation
+    - "api.twilio.com"             # Twilio key validation
+    - "maps.googleapis.com"        # Google Maps key validation
+    - "graph.microsoft.com"        # Azure/Graph token check

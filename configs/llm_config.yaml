@@ -1,0 +1,33 @@
+# configs/llm_config.yaml
+#
+# Implements: Section 3 (llm_config.yaml), Section 9.3 (LLM Model Roles),
+# R-M6 (Groq deprecation timeline)
+# Blueprint: bb_agent_v6.6_final_blueprint.md
+#
+# groq_strategy_model and groq_report_model have NO default (Section 3:
+# "MUST be set; no default -- forces live verification"). Set them only
+# to IDs confirmed live by scripts/verify_groq_models.py -- never
+# hardcode a model string (Section 13: "Hardcoded Groq model IDs" is a
+# permanently rejected item; both current llama tiers deprecate
+# 2026-08-16, three weeks before Week 8 integration).
+
+gemini_model: "gemini-2.5-pro"        # stable channel only; retires Oct 2026 (Section 9.3).
+                                        # gemini-2.5-pro-preview-06-05 was deprecated 2025-12-02
+                                        # and is permanently rejected (Section 13).
+gemini_input_token_cap: 1048576        # Section 2.5 / 8.4
+gemini_thinking_standard: 13000        # Section 2.5 / 8.4: STANDARD calls (chain+BA+BlueAgent)
+gemini_thinking_deep: 32768            # Section 2.5 / 8.4: DEEP calls (ExploitConfirmationAgent)
+
+groq_strategy_model: ""   # MUST SET; run scripts/verify_groq_models.py; no default (Section 3)
+groq_report_model: ""     # MUST SET; run scripts/verify_groq_models.py; no default (Section 3)
+
+# DEPRECATION ALERT (R-M6 fix):
+#   llama-3.1-8b-instant:     deprecated 2026-08-16
+#   llama-3.3-70b-versatile:  deprecated 2026-08-16
+#   Week 8 integration (~2026-09-07) is AFTER these deprecation dates.
+# ACTION REQUIRED before Week 8:
+#   1. Run scripts/verify_groq_models.py to get the current live model list.
+#   2. Set groq_strategy_model and groq_report_model to current live IDs.
+#   3. Candidate replacements (MUST be verified live at time of change):
+#      groq_strategy_model: meta-llama/llama-4-scout or current live equivalent
+#      groq_report_model:   successor to llama-3.1-8b-instant or current live equivalent

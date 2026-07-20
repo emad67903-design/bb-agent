@@ -1,0 +1,20 @@
+# requirements.txt
+#
+# Implements: Section 3 (repo-root requirements.txt)
+# Blueprint: bb_agent_v6.6_final_blueprint.md
+#
+# WEEK 0 SCOPE: only what Week 0's deliverables actually import. Later
+# weeks ADD to this same file as they land (single source of truth, same
+# discipline as core/ontology/ and SCANNER_REGISTRY) -- do not create a
+# parallel requirements file. Known future addition already dated by the
+# blueprint itself:
+#   networkx>=3.2,<4.0   # required for edges="links" compatibility -- Week 4 (BeliefGraph)
+
+PyYAML>=6.0,<7.0
+psutil>=5.9,<6.0
+requests>=2.31,<3.0
+keyring>=24.0,<26.0
+
+# --- dev / test only ---
+pytest>=8.0,<9.0
+pytest-mock>=3.12,<4.0
