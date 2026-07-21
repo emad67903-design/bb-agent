@@ -1,0 +1,7 @@
+{
+  "_file_type": "injectable_payload",
+  "_scanner": "open_redirect",
+  "_notes": "Protocol-relative, javascript:, data:",
+  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside open_redirect",
+  "payloads": []
+}

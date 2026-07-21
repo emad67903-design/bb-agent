@@ -1,0 +1,7 @@
+{
+  "_file_type": "injectable_payload",
+  "_scanner": "api_versioning",
+  "_notes": "/v1/ vs /v2/ access tests",
+  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside api_versioning",
+  "payloads": []
+}
