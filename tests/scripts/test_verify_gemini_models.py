@@ -97,6 +97,17 @@ class TestGetApiKey:
         with pytest.raises(GeminiVerificationError, match="OS keyring"):
             _get_api_key()
 
+    def test_backend_failure_raises_gemini_verification_error_not_raw_exception(self, mocker):
+        # Regression test: mirrors the identical fix in verify_groq_models.py.
+        import keyring.errors
+
+        mocker.patch(
+            "scripts.verify_gemini_models.keyring.get_password",
+            side_effect=keyring.errors.NoKeyringError("No recommended backend was available"),
+        )
+        with pytest.raises(GeminiVerificationError, match="OS keyring backend error"):
+            _get_api_key()
+
 
 class TestVerify:
     def test_live_true_for_stable_model(self, llm_config, mocker):

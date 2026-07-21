@@ -236,7 +236,14 @@ def _check_keyring_secrets(service: str) -> tuple[bool, str]:
     import keyring
 
     required = ("GROQ_API_KEY", "GEMINI_API_KEY", "TELEGRAM_TOKEN")
-    missing = [name for name in required if not keyring.get_password(service, name)]
+    try:
+        missing = [name for name in required if not keyring.get_password(service, name)]
+    except Exception as exc:  # noqa: BLE001 -- a keyring BACKEND failure
+        # (e.g. keyring.errors.NoKeyringError when no OS keyring backend
+        # is installed at all, as in this build sandbox) is a distinct
+        # failure mode from "the secret isn't stored" but must be a clean
+        # FAIL either way, not an exception escaping to the runner.
+        return False, f"keyring backend error: {exc}"
     if missing:
         return False, f"missing from OS keyring (service={service!r}): {', '.join(missing)}"
     return True, f"all {len(required)} secrets present in OS keyring"

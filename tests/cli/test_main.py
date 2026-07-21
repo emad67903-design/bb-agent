@@ -22,6 +22,7 @@ from cli.main import (
     check_gemini_model,
     check_groq_report_model,
     check_groq_strategy_model,
+    check_keyring_secrets,
     check_payload_inventory,
     check_port_18080,
     check_python_version,
@@ -187,6 +188,43 @@ class TestDeferredChecks:
         ctx = PreflightContext(scanner_registry={"xss_scanner": object()})
         with pytest.raises(NotImplementedError):
             run(check_scanner_ram_gate(ctx))
+
+
+class TestCheckKeyringSecrets:
+    # NOTE ON PATCH TARGETS: _check_keyring_secrets does `import keyring`
+    # LOCALLY inside the function (an intentional lazy import, so
+    # importing cli.main doesn't hard-require the keyring package to be
+    # installed) -- cli.main itself has no module-level `keyring`
+    # attribute to patch. The correct patch target is the real `keyring`
+    # module directly; Python's module cache means that's the same
+    # object the function's local `import keyring` resolves to.
+
+    def test_fails_cleanly_when_backend_raises_no_keyring_error(self, mocker):
+        # Regression test: in a sandbox with no OS keyring backend
+        # installed at all, keyring.get_password raises NoKeyringError.
+        # This must surface as a clean FAIL, not an uncaught exception
+        # that crashes run_all_checks() (the actual failure mode this
+        # test was written to catch, found by running the real suite).
+        import keyring.errors
+
+        mocker.patch(
+            "keyring.get_password",
+            side_effect=keyring.errors.NoKeyringError("No recommended backend was available"),
+        )
+        result = run(check_keyring_secrets(PreflightContext()))
+        assert result.status == CheckStatus.FAIL
+        assert "keyring backend error" in result.detail
+
+    def test_fails_when_secrets_missing_but_backend_works(self, mocker):
+        mocker.patch("keyring.get_password", return_value=None)
+        result = run(check_keyring_secrets(PreflightContext()))
+        assert result.status == CheckStatus.FAIL
+        assert "missing from OS keyring" in result.detail
+
+    def test_passes_when_all_three_present(self, mocker):
+        mocker.patch("keyring.get_password", return_value="fake-secret-value")
+        result = run(check_keyring_secrets(PreflightContext()))
+        assert result.status == CheckStatus.PASS
 
 
 class TestGroqGeminiChecksMocked:

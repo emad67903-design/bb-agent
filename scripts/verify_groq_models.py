@@ -64,9 +64,20 @@ def _get_api_key() -> str:
     """Fetches GROQ_API_KEY from the OS keyring (Section 3: keyring_secrets).
 
     Raises:
-        GroqVerificationError: If no key is stored.
+        GroqVerificationError: If no key is stored, OR the keyring
+            backend itself fails (e.g. keyring.errors.NoKeyringError
+            when no OS keyring backend is installed) -- both must
+            surface as THIS script's exception type, not an arbitrary
+            one, so every caller's `except GroqVerificationError` catches
+            both failure modes uniformly.
     """
-    key = keyring.get_password(KEYRING_SERVICE, KEYRING_GROQ_KEY_NAME)
+    try:
+        key = keyring.get_password(KEYRING_SERVICE, KEYRING_GROQ_KEY_NAME)
+    except Exception as exc:  # noqa: BLE001 -- keyring backend failures
+        # are not enumerable in advance across platforms; re-raised as
+        # this module's own exception type rather than left as a raw,
+        # uncaught third-party exception.
+        raise GroqVerificationError(f"OS keyring backend error: {exc}") from exc
     if not key:
         raise GroqVerificationError(
             f"No {KEYRING_GROQ_KEY_NAME} found in OS keyring under service "

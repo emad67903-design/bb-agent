@@ -103,6 +103,21 @@ class TestGetApiKey:
         mocker.patch("scripts.verify_groq_models.keyring.get_password", return_value="stored-key")
         assert _get_api_key() == "stored-key"
 
+    def test_backend_failure_raises_groq_verification_error_not_raw_exception(self, mocker):
+        # Regression test: keyring.errors.NoKeyringError (no OS keyring
+        # backend installed at all -- this build sandbox's actual state)
+        # must be re-raised as GroqVerificationError, not escape as a raw
+        # third-party exception type that callers' `except
+        # GroqVerificationError` clauses don't catch.
+        import keyring.errors
+
+        mocker.patch(
+            "scripts.verify_groq_models.keyring.get_password",
+            side_effect=keyring.errors.NoKeyringError("No recommended backend was available"),
+        )
+        with pytest.raises(GroqVerificationError, match="OS keyring backend error"):
+            _get_api_key()
+
 
 class TestVerify:
     def test_all_live_true_when_both_configured_models_present(self, llm_config, mocker):

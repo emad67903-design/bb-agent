@@ -49,7 +49,22 @@ class GeminiVerificationResult:
 
 
 def _get_api_key() -> str:
-    key = keyring.get_password(KEYRING_SERVICE, KEYRING_GEMINI_KEY_NAME)
+    """Fetches GEMINI_API_KEY from the OS keyring (Section 3: keyring_secrets).
+
+    Raises:
+        GeminiVerificationError: If no key is stored, OR the keyring
+            backend itself fails (e.g. keyring.errors.NoKeyringError
+            when no OS keyring backend is installed) -- both must
+            surface as THIS script's exception type (mirrors the
+            verify_groq_models.py fix for the identical failure mode).
+    """
+    try:
+        key = keyring.get_password(KEYRING_SERVICE, KEYRING_GEMINI_KEY_NAME)
+    except Exception as exc:  # noqa: BLE001 -- keyring backend failures
+        # are not enumerable in advance across platforms; re-raised as
+        # this module's own exception type rather than left as a raw,
+        # uncaught third-party exception.
+        raise GeminiVerificationError(f"OS keyring backend error: {exc}") from exc
     if not key:
         raise GeminiVerificationError(
             f"No {KEYRING_GEMINI_KEY_NAME} found in OS keyring under service "
