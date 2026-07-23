@@ -1,0 +1,104 @@
+# configs/vuln_thresholds.yaml
+#
+# Implements: Section 3 (vuln_thresholds.yaml -- "Full content: Section 5.4"),
+# Section 5.4 (complete, all 29 types), Section 5.2 (evidence substitutes,
+# counting rule), R-M2 (boolean_differential_confirmed substitute)
+# Blueprint: bb_agent_v6.6_final_blueprint.md
+#
+# Consumed by core/verifier/evidence_chain.py (Week 1) to build
+# EvidenceChain instances with the correct min_required and to resolve
+# core-type-unavailable -> substitute-type mappings. Values below are
+# copied verbatim from Section 5.4's YAML block -- not re-derived.
+
+min_signals:
+  xss: 4
+  sqli: 3
+  ssti: 3
+  ssrf: 2
+  cmd_injection: 2
+  xxe: 2
+  lfi: 3
+  idor: 3
+  mass_assignment: 2
+  auth: 2
+  cors: 4              # Section 5.4 cross-ref fix: corrected from 2 to 4 (v6.4-007)
+  jwt: 2
+  oauth: 3
+  csrf: 3
+  race: 2
+  bac: 3
+  business_logic: 3
+  graphql: 2
+  websocket: 2
+  api_versioning: 2
+  hardcoded_credentials: 2
+  nuclei: 2
+  prototype_pollution: 2
+  deserialization: 2
+  crlf_injection: 2
+  path_traversal: 3
+  open_redirect: 2
+  host_header: 2
+  http_smuggling: 2
+  default: 2
+
+# All values achievable: see Section 5.3 matrix.
+min_evidence_types:
+  xss: 3
+  sqli: 4              # injection_confirmed or boolean_differential_confirmed sub ensures reachability
+  ssti: 3
+  ssrf: 2
+  cmd_injection: 2
+  xxe: 2
+  lfi: 3
+  idor: 3
+  mass_assignment: 2
+  auth: 2
+  cors: 2
+  jwt: 2
+  oauth: 3
+  csrf: 3
+  race: 3              # diff + timing + (replay OR timing_confirmed sub)
+  bac: 3
+  business_logic: 3
+  graphql: 2
+  websocket: 2
+  api_versioning: 2
+  hardcoded_credentials: 2
+  nuclei: 2
+  prototype_pollution: 2
+  deserialization: 2
+  crlf_injection: 2
+  path_traversal: 3
+  open_redirect: 2
+  host_header: 2
+  http_smuggling: 2
+  default: 2
+
+# COUNTING RULE (Section 5.2): 1 unique substitute type collected = 1 slot
+# (not 2, regardless of how many core types map to the same substitute
+# below). Enforced by EvidenceChain.meets_per_vuln_minimum via set()
+# over collected_types, not by anything in this mapping itself -- this
+# mapping only says WHICH substitute stands in for WHICH unavailable
+# core type, per vuln_type.
+evidence_substitutes:
+  xss:
+    oob_interaction:  dom_execution_confirmed
+    timing_anomaly:   dom_execution_confirmed      # same sub; 1 slot regardless
+  sqli:
+    oob_interaction:  injection_confirmed
+    timing_anomaly:   injection_confirmed          # same sub; 1 slot regardless
+    cross_scanner:    boolean_differential_confirmed  # boolean-blind fallback (R-M2)
+    chain_proven:     boolean_differential_confirmed  # same sub; 1 slot regardless
+  csrf:
+    oob_interaction:  cross_site_execution_confirmed
+    timing_anomaly:   cross_site_execution_confirmed
+  business_logic:
+    oob_interaction:  workflow_trace_confirmed
+    timing_anomaly:   workflow_trace_confirmed
+  idor:
+    timing_anomaly:   cross_account_readback
+  bac:
+    timing_anomaly:   cross_account_readback
+  race:
+    replay_stable:    timing_confirmed
