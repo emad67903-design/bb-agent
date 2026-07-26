@@ -11,6 +11,7 @@ import yaml
 from core.governance.scope_config_generator import (
     ScopeConfigError,
     generate_scope_allowed_json,
+    load_program_type,
     load_scope_domains,
 )
 
@@ -64,6 +65,42 @@ class TestLoadScopeDomains:
         path.write_text("- just\n- a\n- list\n", encoding="utf-8")
         with pytest.raises(ScopeConfigError, match="scope_domains"):
             load_scope_domains(path)
+
+
+class TestLoadProgramType:
+    """Section 3's scope.yaml comment block (R-L5 fix): program_type
+    determines the max autonomous tier -- consumed by
+    core/governance/safety_gate.py's VDP enforcement."""
+
+    def test_loads_bug_bounty(self, scope_yaml):
+        path = scope_yaml({"program_type": "bug_bounty", "scope_domains": ["a.com"]})
+        assert load_program_type(path) == "bug_bounty"
+
+    def test_loads_vdp(self, scope_yaml):
+        path = scope_yaml({"program_type": "vdp", "scope_domains": ["a.com"]})
+        assert load_program_type(path) == "vdp"
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(ScopeConfigError, match="not found"):
+            load_program_type(tmp_path / "does_not_exist.yaml")
+
+    def test_missing_program_type_key_raises(self, scope_yaml):
+        path = scope_yaml({"scope_domains": ["a.com"]})
+        with pytest.raises(ScopeConfigError, match="program_type"):
+            load_program_type(path)
+
+    def test_invalid_program_type_value_raises_fail_closed(self, scope_yaml):
+        """Section-cited fail-closed behavior: an unrecognized value must
+        not silently default to either bug_bounty's or vdp's cap."""
+        path = scope_yaml({"program_type": "enterprise_pentest", "scope_domains": ["a.com"]})
+        with pytest.raises(ScopeConfigError, match="bug_bounty"):
+            load_program_type(path)
+
+    def test_malformed_yaml_raises(self, tmp_path):
+        path = tmp_path / "scope.yaml"
+        path.write_text("program_type: [unclosed", encoding="utf-8")
+        with pytest.raises(ScopeConfigError, match="not valid YAML"):
+            load_program_type(path)
 
 
 class TestGenerateScopeAllowedJson:

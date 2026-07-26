@@ -5,7 +5,7 @@ Blueprint: bb_agent_v6.6_final_blueprint.md
 
 import pytest
 
-from core.ontology.enums import EvidenceType, PayloadFileType
+from core.ontology.enums import EvidenceType, PayloadFileType, TierLevel
 
 
 class TestPayloadFileType:
@@ -69,3 +69,44 @@ class TestEvidenceType:
     def test_invalid_value_raises(self):
         with pytest.raises(ValueError):
             EvidenceType("not_a_real_evidence_type")
+
+
+class TestTierLevel:
+    """Section 10.1's four Permanent Tier Boundaries. Week 2 authorized
+    addition (docs/DECISIONS.md) -- these tests exist specifically to
+    pin the ordinal behavior Section 10.1's own code depends on
+    (`if requested_tier > TierLevel.TIER_B`), not just the values.
+    """
+
+    def test_has_exactly_four_members(self):
+        assert len(TierLevel) == 4
+
+    def test_values_match_authorized_ordinal_assignment(self):
+        assert TierLevel.TIER_A == 1
+        assert TierLevel.TIER_B == 2
+        assert TierLevel.TIER_C == 3
+        assert TierLevel.TIER_D == 4
+
+    def test_ordering_matches_section_10_1_risk_order(self):
+        assert TierLevel.TIER_A < TierLevel.TIER_B < TierLevel.TIER_C < TierLevel.TIER_D
+
+    def test_section_10_1_vdp_comparison_examples(self):
+        """`if requested_tier > TierLevel.TIER_B` -- the exact expression
+        Section 10.1's code block uses. TIER_C and TIER_D must both
+        exceed TIER_B; TIER_A and TIER_B must not."""
+        assert TierLevel.TIER_C > TierLevel.TIER_B
+        assert TierLevel.TIER_D > TierLevel.TIER_B
+        assert not (TierLevel.TIER_B > TierLevel.TIER_B)
+        assert not (TierLevel.TIER_A > TierLevel.TIER_B)
+
+    def test_is_intenum_not_str_mixin(self):
+        """Deliberately NOT a (str, Enum) mixin like PayloadFileType/
+        EvidenceType -- see module docstring: a str-mixin's descriptive
+        slugs (read_only/low_risk_probe/state_changing/destructive) do
+        not sort in risk order, which would make `>` silently wrong."""
+        assert isinstance(TierLevel.TIER_C, int)
+        assert not isinstance(TierLevel.TIER_C, str)
+
+    def test_invalid_value_raises(self):
+        with pytest.raises(ValueError):
+            TierLevel(99)

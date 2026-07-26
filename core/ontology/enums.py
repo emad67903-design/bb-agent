@@ -1,6 +1,31 @@
 """
 Implements: Section 3 -- core/ontology/enums.py (PayloadFileType, EvidenceType)
+Also implements: Section 10.1 / Section 3's safety_gate.py comment
+(TierLevel -- see WEEK 2 note below).
 Blueprint: bb_agent_v6.6_final_blueprint.md
+
+WEEK 2 ADDITION -- TierLevel (AUTHORIZED, not inferred):
+`TierLevel` is used with ordinal comparison in two places (Section 3's
+safety_gate.py tree comment: "max_allowed_tier = TierLevel.TIER_B";
+Section 10.1's code block: "if requested_tier > TierLevel.TIER_B"), but
+is absent from the eleven enums Section 3 explicitly names for this
+file (grep-verified: neither occurrence is in that list). This is a
+foundational ontology type referenced by, and needed by, TWO Week 2
+components at once (core/governance/autonomous_risk_gate.py and
+core/governance/safety_gate.py) -- the Engineering Constitution's STOP
+CONDITIONS apply to exactly this shape of gap (a type consumed by more
+than one component, not yet declared anywhere), not the narrower
+"document a judgment call and proceed" pattern used elsewhere in this
+file for single-consumer gaps. Flagged as a hard stop mid-session;
+member set, ordering, and values below were then explicitly authorized
+by the user rather than inferred -- see docs/DECISIONS.md, Week 2
+section, for the full exchange. `IntEnum` (not the `(str, Enum)` mixin
+PayloadFileType/EvidenceType use) is required because Section 10.1's own
+code performs ordinal comparison (`>`) between members; a str-mixin
+would compare lexicographically on whatever string value each member
+carried, which -- for the tier's own descriptive slugs
+(read_only/low_risk_probe/state_changing/destructive) -- does NOT sort
+in risk order and would make `>` silently wrong.
 
 WEEK 0/1 SCOPE NOTE: Section 3 names eleven enums for this module
 (FailureCause, RiskLevel, WorkflowConfidence, HumanFeedback,
@@ -33,7 +58,7 @@ checked directly against Section 12 rather than assumed):
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import Enum, IntEnum
 
 
 class PayloadFileType(str, Enum):
@@ -89,3 +114,34 @@ class EvidenceType(str, Enum):
     WORKFLOW_TRACE_CONFIRMED = "workflow_trace_confirmed"            # Business Logic
     CROSS_ACCOUNT_READBACK = "cross_account_readback"                # IDOR, BAC
     TIMING_CONFIRMED = "timing_confirmed"                            # Race
+
+
+class TierLevel(IntEnum):
+    """Section 10.1's four Permanent Tier Boundaries. AUTHORIZED addition
+    (Week 2), not one of Section 3's eleven named enums -- see this
+    module's header docstring and docs/DECISIONS.md for why this is
+    documented as an authorized decision rather than an inference.
+
+    Ordinal by construction: TIER_A < TIER_B < TIER_C < TIER_D, matching
+    Section 10.1's own table order (least to most risky) and enabling
+    the exact comparison Section 10.1's code block performs verbatim:
+    `if requested_tier > TierLevel.TIER_B`.
+
+    Members (value = ordinal rank, not a serialized slug; the
+    parenthetical class name from Section 10.1's table is preserved
+    below only as documentation):
+        TIER_A = 1  -- read_only.        Always autonomous.
+        TIER_B = 2  -- low_risk_probe.    Always autonomous. VDP caps here.
+        TIER_C = 3  -- state_changing.    Autonomous only if reversible,
+                                          test accounts, safe exploit proven.
+                                          VDP: not permitted.
+        TIER_D = 4  -- destructive.       NEVER autonomous. Human approval
+                                          required. Permanent, no exceptions
+                                          (Section 10.1; restated as a core
+                                          invariant at the project level).
+    """
+
+    TIER_A = 1  # read_only
+    TIER_B = 2  # low_risk_probe
+    TIER_C = 3  # state_changing
+    TIER_D = 4  # destructive

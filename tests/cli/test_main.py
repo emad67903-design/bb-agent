@@ -280,11 +280,22 @@ class TestRunAllChecks:
         for r in results:
             assert r.status in (CheckStatus.PASS, CheckStatus.FAIL, CheckStatus.NOT_YET_IMPLEMENTED)
 
-    def test_deferred_checks_report_not_yet_implemented_by_default(self):
+    def test_scanner_ram_gate_still_not_yet_implemented(self):
+        """SCANNER_REGISTRY + the 29 scanners are Week 5/7 -- still absent."""
         results = run(run_all_checks())
         by_name = {r.name: r for r in results}
-        assert by_name["webhook_binding"].status == CheckStatus.NOT_YET_IMPLEMENTED
         assert by_name["scanner_ram_gate"].status == CheckStatus.NOT_YET_IMPLEMENTED
+
+    def test_webhook_binding_now_live_and_passes(self):
+        """Week 2: core/triggers/webhook_trigger.py now exists and binds
+        127.0.0.1 with no 0.0.0.0 literal -- item 8's "goes live
+        automatically once target code exists" transition. This replaces
+        the old NOT_YET_IMPLEMENTED expectation for this one check;
+        scanner_ram_gate's NOT_YET_IMPLEMENTED expectation is unaffected
+        (see test_scanner_ram_gate_still_not_yet_implemented above)."""
+        results = run(run_all_checks())
+        by_name = {r.name: r for r in results}
+        assert by_name["webhook_binding"].status == CheckStatus.PASS
 
 
 class TestPrintReport:
