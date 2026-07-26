@@ -692,3 +692,10 @@ occasion. Resolution deferred to whichever week actually builds
 single-file/low-blast-radius category as items 21 and 23's
 `WebhookEvent`/`PersonaName` — not added to `core/ontology/`.
 
+**Resolved:** confirmed directly by the project owner — the five-item
+kickoff list naming `webhook_trigger.py` was not an intentional
+exclusion of `trigger_router.py`; TriggerRouter was always in scope,
+matching Section 12's row title. No code changes required. This entry
+stands as a closed record of how the tension was surfaced and decided,
+not an open flag.
+
