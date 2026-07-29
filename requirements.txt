@@ -14,6 +14,13 @@ PyYAML>=6.0,<7.0
 psutil>=5.9,<6.0
 requests>=2.31,<3.0
 keyring>=24.0,<26.0
+playwright>=1.40,<2.0  # Week 3: core/browser/browser_tool.py (Section 3).
+                        # Chromium binary install (`playwright install chromium`)
+                        # is separate from this pip package -- Section 3's
+                        # cli/main.py preflight check `playwright_browsers`
+                        # already names this as a startup gate; not modified
+                        # this week (cli/main.py's own preflight list isn't a
+                        # Week 3 deliverable).
 
 # --- dev / test only ---
 pytest>=8.0,<9.0

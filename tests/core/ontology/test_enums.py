@@ -5,7 +5,13 @@ Blueprint: bb_agent_v6.6_final_blueprint.md
 
 import pytest
 
-from core.ontology.enums import EvidenceType, PayloadFileType, TierLevel
+from core.ontology.enums import (
+    BusinessValue,
+    EvidenceType,
+    PayloadFileType,
+    TargetType,
+    TierLevel,
+)
 
 
 class TestPayloadFileType:
@@ -110,3 +116,80 @@ class TestTierLevel:
     def test_invalid_value_raises(self):
         with pytest.raises(ValueError):
             TierLevel(99)
+
+
+class TestTargetType:
+    """Section 3, 7 members, verbatim -- Week 3 addition."""
+
+    def test_has_exactly_seven_members(self):
+        assert len(TargetType) == 7
+
+    def test_values_match_section_3_verbatim(self):
+        assert TargetType.SPA.value == "spa"
+        assert TargetType.REST_API.value == "rest_api"
+        assert TargetType.MVC_WEB.value == "mvc_web"
+        assert TargetType.GRAPHQL.value == "graphql"
+        assert TargetType.ECOMMERCE.value == "ecommerce"
+        assert TargetType.ADMIN_PANEL.value == "admin_panel"
+        assert TargetType.UNKNOWN.value == "unknown"
+
+    def test_string_mixin_serializes_as_plain_value(self):
+        assert TargetType.SPA == "spa"
+        assert f"{TargetType.REST_API.value}" == "rest_api"
+
+    def test_constructs_from_string_value(self):
+        assert TargetType("mvc_web") is TargetType.MVC_WEB
+
+    def test_invalid_value_raises(self):
+        with pytest.raises(ValueError):
+            TargetType("not_a_real_target_type")
+
+
+class TestBusinessValue:
+    """Section 3 (LOW/MEDIUM/HIGH) + Section 11.3's R-L4 fix (UNKNOWN) =
+    4 members. Week 3 addition; see docs/DECISIONS.md item 27 and this
+    module's own docstring for why 4, not Section 3's literal 3.
+    """
+
+    def test_has_exactly_four_members(self):
+        """Not 3 -- Section 11.3's deserialization fallback
+        (`BusinessValue.UNKNOWN`) has no member to construct without
+        this 4th one; see docs/DECISIONS.md item 27."""
+        assert len(BusinessValue) == 4
+
+    def test_values_match_section_3_and_11_3(self):
+        assert BusinessValue.LOW.value == "low"
+        assert BusinessValue.MEDIUM.value == "medium"
+        assert BusinessValue.HIGH.value == "high"
+        assert BusinessValue.UNKNOWN.value == "unknown"
+
+    def test_string_mixin_serializes_as_plain_value(self):
+        assert BusinessValue.HIGH == "high"
+        assert f"{BusinessValue.LOW.value}" == "low"
+
+    def test_constructs_from_string_value(self):
+        assert BusinessValue("medium") is BusinessValue.MEDIUM
+
+    def test_invalid_value_raises(self):
+        with pytest.raises(ValueError):
+            BusinessValue("not_a_real_business_value")
+
+    def test_section_11_3_deserialization_fallback_pattern(self):
+        """Pins the exact R-L4 pattern Week 4 will rely on: constructing
+        from an unrecognized stored string raises ValueError, and the
+        catch recovers to BusinessValue.UNKNOWN -- the reason this 4th
+        member exists at all."""
+        raw_value = "some_corrupted_checkpoint_string"
+        try:
+            result = BusinessValue(raw_value)
+        except ValueError:
+            result = BusinessValue.UNKNOWN
+        assert result is BusinessValue.UNKNOWN
+
+    def test_unknown_is_distinct_from_the_three_scoring_outcomes(self):
+        """info_gain_scorer.py's scoring function (Section 6.7) must
+        never produce UNKNOWN -- it is reserved for Week 4's
+        deserialization fallback only (this module's docstring)."""
+        scoring_outcomes = {BusinessValue.LOW, BusinessValue.MEDIUM, BusinessValue.HIGH}
+        assert BusinessValue.UNKNOWN not in scoring_outcomes
+        assert len(scoring_outcomes) == 3

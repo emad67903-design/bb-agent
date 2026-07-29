@@ -31,17 +31,17 @@ WEEK 0/1 SCOPE NOTE: Section 3 names eleven enums for this module
 (FailureCause, RiskLevel, WorkflowConfidence, HumanFeedback,
 MemoryEntryStatus, CalibrationBand, EvidenceType, PayloadFileType,
 TargetType, BusinessValue, BudgetProfile). PayloadFileType (Week 0) and
-EvidenceType (Week 1, added this week -- consumed by
-core/ontology/findings.py's EvidenceChain and core/verifier/evidence_chain.py,
-per docs/DECISIONS.md item 4) are implemented. The remaining nine are
-intentionally NOT built yet -- per the Engineering Constitution's strict
-week ordering, building them now would be pulling later weeks' contracts
-forward before the sections that define their exact members and usage
-are actually implemented. They will be added to THIS file (never a
+EvidenceType (Week 1 -- consumed by core/ontology/findings.py's
+EvidenceChain and core/verifier/evidence_chain.py, per docs/DECISIONS.md
+item 4) are implemented. TargetType and BusinessValue are added this
+week (Week 3, see below). The remaining seven are intentionally NOT
+built yet -- per the Engineering Constitution's strict week ordering,
+building them now would be pulling later weeks' contracts forward
+before the sections that define their exact members and usage are
+actually implemented. They will be added to THIS file (never a
 parallel file) as their owning week arrives -- ontology-first, single
 source of truth. Per-enum landing point (docs/DECISIONS.md item 4,
 checked directly against Section 12 rather than assumed):
-  - BusinessValue, TargetType -> Week 3 (explicitly named in the Week 3 row)
   - BudgetProfile -> no week explicitly names this in Section 12. Lands
     whenever config.py/AgentConfig is first substantively built, or no
     later than Week 7 if that comes first (docs/DECISIONS.md item 4).
@@ -54,6 +54,51 @@ checked directly against Section 12 rather than assumed):
   - FailureCause, RiskLevel, WorkflowConfidence, HumanFeedback,
     MemoryEntryStatus, CalibrationBand -> not yet mapped to a specific
     week; will be added when their first real consumer is implemented.
+
+WEEK 3 ADDITION -- TargetType (verbatim, no ambiguity):
+Section 3 names this enum directly, with all 7 members and their
+string values given explicitly (SPA, REST_API, MVC_WEB, GRAPHQL,
+ECOMMERCE, ADMIN_PANEL, UNKNOWN). Its only Week 3 consumer is
+`TargetAdapter` (core/planning/target_adapter.py, used by
+CampaignPlanner, Section 6.4) -- single consumer, no cross-component
+ambiguity of the kind that triggered TierLevel's hard stop (item 20).
+`(str, Enum)` mixin, matching PayloadFileType/EvidenceType: no ordinal
+comparison is used on this type anywhere in the blueprint.
+
+WEEK 3 ADDITION -- BusinessValue (4 members, not 3 -- pre-flagged and
+now resolved, see docs/DECISIONS.md item 27 for the full record):
+Section 3's own listing here shows only 3 members (LOW/MEDIUM/HIGH).
+Section 11.3's BeliefGraph deserialization code
+(`except ValueError: node["business_value"] = BusinessValue.UNKNOWN`)
+requires a 4th member that Section 3 never lists. This exact gap was
+already caught and logged at Week 0 close (docs/DECISIONS.md item 4's
+"Flag for whenever BusinessValue is actually implemented" note, itself
+written before this file had EITHER TargetType or BusinessValue) --
+this is that flag's resolution, not a fresh guess: `UNKNOWN` is added
+as a 4th member now so Week 4's own R-L4 fix type-checks when it
+arrives, rather than this file re-creating the exact gap Week 4 would
+otherwise inherit. `(str, Enum)` mixin -- no ordinal comparison is used
+on this type anywhere in the blueprint (Section 6.7's trigger condition
+and Section 8.1's BeliefGraph->DeepLane flow both use `==`, never `<`/`>`);
+this also matches this module's own PayloadFileType docstring, written
+back in Week 0, which already assumed "the BusinessValue enum's
+serialization treatment in Section 11.3" would be a str-mixin.
+
+Scope boundary, stated explicitly: this enum's own 4th member,
+`UNKNOWN`, is reserved EXCLUSIVELY for Week 4's BeliefGraph
+deserialization fallback path (R-L4). `info_gain_scorer.py`'s actual
+scoring function (Section 6.7: HIGH if max(exploitability_score) >= 0.7,
+MEDIUM if 0.4 <= max < 0.7, LOW if max < 0.4), built this session in
+`core/planning/info_gain_scorer.py`, never returns `BusinessValue.UNKNOWN`
+-- there is no score threshold that produces it, by design (see
+`test_never_returns_unknown` in that module's own test file).
+
+`UNKNOWN`'s string value ("unknown") is a documented placement choice,
+not a blueprint citation -- Section 11.3 names the member but never
+gives it a literal string value anywhere (it's constructed directly as
+`BusinessValue.UNKNOWN`, never from a string). Chosen to match
+TargetType's own `UNKNOWN = "unknown"` convention two members above,
+for consistency within this same file.
 """
 
 from __future__ import annotations
@@ -145,3 +190,48 @@ class TierLevel(IntEnum):
     TIER_B = 2  # low_risk_probe
     TIER_C = 3  # state_changing
     TIER_D = 4  # destructive
+
+
+class TargetType(str, Enum):
+    """Target application classification (Section 3, 7 members, verbatim).
+
+    Backs `TargetAdapter` (core/planning/target_adapter.py), consumed by
+    `CampaignPlanner` (Section 6.4) to select an ordered test plan and
+    scanner weights appropriate to the target's shape. Single Week 3
+    consumer path -- no cross-component ambiguity of the kind that
+    required a hard stop for TierLevel (item 20) or MentalModel
+    (docs/DECISIONS.md item 29).
+    """
+
+    SPA = "spa"
+    REST_API = "rest_api"
+    MVC_WEB = "mvc_web"
+    GRAPHQL = "graphql"
+    ECOMMERCE = "ecommerce"
+    ADMIN_PANEL = "admin_panel"
+    UNKNOWN = "unknown"
+
+
+class BusinessValue(str, Enum):
+    """Exploitability-derived value tier for a BeliefGraph hypothesis
+    (Section 3 + Section 11.3; 4 members -- see this module's docstring
+    and docs/DECISIONS.md item 27 for why 4, not Section 3's literal 3).
+
+    Computed by `info_gain_scorer.py` from a MentalModel's assumptions:
+    HIGH if max(exploitability_score of relevant assumptions) >= 0.7,
+    MEDIUM if 0.4 <= max < 0.7, LOW if max < 0.4 (Section 6.7). Stored on
+    BeliefGraph nodes (Section 11.2) and used, by equality only (never
+    ordinally), as part of Deep Lane's activation trigger (Section 6.7:
+    `business_value == BusinessValue.HIGH`).
+
+    `UNKNOWN` is NOT one of the three scoring outcomes above. It exists
+    solely as Week 4's BeliefGraph-deserialization fallback (Section
+    11.3, R-L4 fix) when a corrupted checkpoint's stored value fails to
+    parse as one of LOW/MEDIUM/HIGH. `info_gain_scorer.py`'s scoring
+    function must never produce it.
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    UNKNOWN = "unknown"

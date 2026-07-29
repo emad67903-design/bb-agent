@@ -699,3 +699,560 @@ matching Section 12's row title. No code changes required. This entry
 stands as a closed record of how the tension was surfaced and decided,
 not an open flag.
 
+
+---
+
+## Week 3
+
+## 27. `core/ontology/enums.py` — `BusinessValue` built as 4 members, not Section 3's literal 3 (resolution of item 4's standing flag)
+
+**Not a fresh guess — this gap was already on record.** Item 4 (Week 0)
+flagged the exact conflict on first reading of the blueprint, before
+this file had either `TargetType` or `BusinessValue`: Section 3 lists
+`BusinessValue` with 3 members (LOW/MEDIUM/HIGH) but Section 11.3's
+BeliefGraph deserialization code constructs `BusinessValue.UNKNOWN` on a
+corrupted checkpoint (`except ValueError: node["business_value"] =
+BusinessValue.UNKNOWN`) — a member Section 3 never declares.
+Re-verified directly against both sections again this week (grep, not
+memory of item 4's text): still exactly 3 vs. the 4th member the
+deserialization code requires.
+
+**Resolution: `UNKNOWN` added as a 4th member.** `(str, Enum)` mixin,
+matching `PayloadFileType`/`EvidenceType` — no ordinal comparison is
+used on this type anywhere in the blueprint (Section 6.7's activation
+trigger and Section 8.1's BeliefGraph flow both use `==` only). Value
+`"unknown"` is a documented placement choice, not a blueprint citation:
+Section 11.3 constructs the member directly (`BusinessValue.UNKNOWN`),
+never from a string literal, so no value is specified there one way or
+the other; `"unknown"` matches `TargetType.UNKNOWN`'s own value in this
+same file for within-file consistency.
+
+**Scope boundary, explicit:** this is an ontology-only change. `UNKNOWN`
+is reserved exclusively for Week 4's R-L4 deserialization fallback,
+never a possible output of `info_gain_scorer.py`'s own scoring function
+(Section 6.7's three thresholds cover LOW/MEDIUM/HIGH only, with no
+branch that could produce a 4th outcome). `info_gain_scorer.py`'s real
+scoring logic is NOT implemented this session — it reads "MentalModel
+assumptions" (Section 6.7), and MentalModel's field list is still being
+proposed (item 30 below), not yet confirmed.
+
+**Why this isn't held to the "hard stop, in its own message" standard**
+despite also being an ontology gap: the type's *file* was never in
+question (Section 3 names `BusinessValue` for `core/ontology/enums.py`
+explicitly, unlike `TierLevel`, which appeared in code blocks but
+nowhere in Section 3's own eleven-enum list). The only open question was
+member *count*, already surfaced in writing at Week 0 close (item 4);
+this week's continuation prompt carried that flag forward with an
+explicit build-4-now instruction and reasoning, treated here as the
+authorization item 4 was waiting for.
+
+Diff (`core/ontology/enums.py`, `tests/core/ontology/test_enums.py`):
+included verbatim in this reply, per instruction C(1).
+
+## 28. `browser_tool.py` / `network_observer.py` — RESOLVED: Week 3 owns them, Week 6's listing is documented blueprint drift
+
+**The conflict (independently found this session, not flagged in the
+continuation prompt):** Section 12 lists this component's scope check
+under BOTH the Week 3 row (line 1926: *"`BrowserTool` scope check at
+entry point; `network_observer.py` sub-request aborting"*) and the Week
+6 row (line 1932: *"`browser_tool.py` scope check; `network_observer.py`
+sub-request abort..."*), near-verbatim, with no arbitration anywhere
+else in the document (checked Section 14, Section 15, and every other
+`browser_tool.py`/`network_observer.py` mention — none resolves which
+week owns it).
+
+**Resolution (project owner, this reply, re-verified against the cited
+section directly — not accepted on assertion alone):** Week 3 owns it.
+Section 3's own `browser_tool.py` comment block names `MentalModelBuilder`
+as one of the five call sites this check applies to ("This check
+applies to EVERY browser_tool.py call site: MentalModelBuilder,
+xss_verifier.py, csrf_scanner.py, visual_diff.py, interaction_recorder.py")
+— confirmed verbatim at the cited location. Week 3 cannot functionally
+complete without this scope check existing first (`MentalModelBuilder`
+is a direct Week 3 deliverable). Week 6's identical listing is treated
+as documented blueprint drift — the same defect class as `v6.4-003`'s
+`ToolSelector` double-booking and item 4's `WebSocket`-listed-twice
+`auto_allow` bug — not a second, independent build phase; nothing
+additive distinguishes the two rows' wording the way, e.g., Week 2's VDP
+enforcement in `safety_gate.py` and Week 6's later
+`credential_validation_allowlist` *addition* to the same file clearly
+are two different pieces of work on the same module.
+
+**Built this week:** `core/browser/browser_tool.py` (`BrowserTool.capture()`,
+`OutOfScopeError`, `asyncio.Semaphore(1)` per Section 9.1's explicit RAM
+line), `core/browser/network_observer.py`
+(`build_scope_checking_route_handler` — the actual `page.route()`
+implementation, shared rather than duplicated between the two files,
+since their Section 3 comment blocks describe the identical mechanism).
+Verified end-to-end against a real local HTTP server and real headless
+Chromium, not mocks: out-of-scope URLs raise before any request reaches
+the server; in-scope URLs succeed and return correct
+final-URL/status/HTML; a mixed-scope sub-resource page shows the
+out-of-scope image request aborted and the in-scope one finishing; three
+concurrent `capture()` calls against a deliberately slow endpoint take
+≥0.5s wall-clock (serialized), not ~0.2s (parallel) — the semaphore is
+enforced, not just present in the constructor.
+
+**Not built this week (see item 30):** any code path that actually
+calls `BrowserTool.capture()` — `MentalModelBuilder` itself remains
+blocked on `MentalModel`'s field list.
+
+## 29. `MentalModel` — placement RESOLVED (ontology, not `core/mental_model/model.py`); field list PROPOSED then CONFIRMED and built
+
+**The tension (item 28 in the prior draft of this log, before this
+week's resolution):** Section 3's `state.py` tree comment phrases
+`MentalModel` as a *field* on `ParentState`, implying the type is
+defined elsewhere; `core/mental_model/model.py`'s own tree entry has
+zero description (the only file in its six-file directory without
+one); the Engineering Constitution's ontology-first rule says any
+dataclass belongs in `core/ontology/`. No single spec resolved which of
+these governed.
+
+**Resolution (project owner, this reply):** `core/ontology/`, not
+`core/mental_model/model.py`, on the strength of the direct precedent
+already in this same repository: `JSAnalysisResult` is thematically a
+JS/recon-parsing type, yet Section 3 gives it a complete `@dataclass`
+field listing in `core/ontology/surface.py`, not a recon-specific
+directory. The same reasoning applies to `MentalModel`. Since
+`surface.py` does not exist yet in this repository (confirmed by
+directory listing) and its eventual scope belongs to later weeks
+(`EndpointSignals`, `SurfaceData`, `AttackEdge`, `AttackGraph`,
+`ExploitCandidate` fields, `JSAnalysisResult` itself), `MentalModel`
+will land in a new, narrowly-scoped file rather than a premature
+`surface.py` populated with one unrelated type — proposed name:
+`core/ontology/mental_model.py`. `core/mental_model/model.py` becomes a
+thin re-export (`from core.ontology.mental_model import MentalModel`)
+once the ontology type exists, preserving Section 3's file tree rather
+than removing the entry outright.
+
+**NOT written to code yet, per explicit instruction:** the dataclass
+itself. Section 3 gives no `@dataclass` field listing for `MentalModel`
+anywhere (grep-confirmed, all ~13 occurrences checked — Sections 1, 2.5,
+3 ×2, 6.3, 6.4, 8.1 ×2, 8.3, 8.4, 9.3, 9.3-table, 11.2 — none is a
+field-level spec). The only field-level hints anywhere are Section 2.5's
+Context Window template placeholders. Proposed field list, derived from
+those hints and stated as a proposal, not a commitment:
+
+```python
+@dataclass(frozen=True)
+class Assumption:
+    """One developer assumption extracted by assumption_extractor.py,
+    scored by exploitability_scorer.py (Section 6.3, Groq calls 2+3/4)."""
+    text: str                    # the assumption itself, e.g. "session
+                                  # cookies are httponly"
+    exploitability_score: float  # 0.0-1.0 (Section 6.3: "score each
+                                  # assumption's exploitability_score");
+                                  # this is the exact field
+                                  # info_gain_scorer.py reads (Section 6.7:
+                                  # "max(exploitability_score of relevant
+                                  # assumptions)")
+
+@dataclass(frozen=True)
+class MentalModel:
+    """Section 6.3's Phase 2 output; Section 2.5's Context Window
+    'MENTAL MODEL (Summary)' block is a display projection of this."""
+    business_purpose: str            # Section 2.5: "{business_purpose}"
+    roles: list[str]                 # Section 2.5: "{role_list}" —
+                                      # Groq call 1 output (Section 6.3:
+                                      # "synthesise business purpose +
+                                      # roles + data flows")
+    trust_boundaries: list[str]      # Section 2.5: "{boundary_list}" —
+                                      # Groq call 2 (Section 6.3:
+                                      # "identify trust boundaries")
+    assumptions: list[Assumption]    # Groq call 3 (Section 6.3: "extract
+                                      # developer assumptions"), each
+                                      # scored by Groq call 4
+    is_partial: bool                 # Section 6.3: abort → "use partial
+                                      # model + log [MENTAL_MODEL_PARTIAL]"
+                                      # — needs a flag to actually BE that
+                                      # marker, not just the log line
+```
+
+Explicitly flagged as invented-beyond-the-hints, not blueprint-cited:
+`Assumption` as its own type (vs. e.g. `list[tuple[str, float]]`) and
+`is_partial` (Section 6.3 names the `[MENTAL_MODEL_PARTIAL]` log line
+but never says the resulting `MentalModel` instance itself carries a
+field marking it partial — without one, nothing downstream could
+distinguish a partial model from a complete one except by re-parsing
+logs, which seems like the wrong design but is a judgment call, not a
+citation). `data flows` (mentioned in Section 6.3's Groq-call-1
+description alongside "business purpose + roles") has no corresponding
+field above — no display-template placeholder hints at its shape the
+way `role_list`/`boundary_list` do, so it's omitted rather than guessed
+at; flagging its absence rather than silently dropping it.
+
+**Not built this session pending confirmation of the above:**
+`core/mental_model/` (all six files), `campaign_planner.py`'s actual
+`MentalModel`-consuming logic, `info_gain_scorer.py`'s actual scoring
+function. `core/ontology/state.py` also does not exist yet in this
+repository (confirmed by directory listing) — whatever `ParentState`
+ends up needing is a separate, later scope question, not resolved here.
+
+**Confirmed and built (this reply):** the advisor Claude reviewed the
+proposal above and confirmed it, citing Section 2.5 as the source for
+the four required fields (`business_purpose`, `roles`,
+`trust_boundaries`, `assumptions`) — treated as settled, not
+provisional. `is_partial`, plus two further additions the confirmation
+brought (`pages_analyzed`, `built_at`), are explicitly kept
+RECOMMENDED/PROVISIONAL rather than promoted to the same settled status
+— they support cited behavior (partial-abort, Section 6.3;
+revisability, Section 1.4) without themselves being cited fields.
+`Assumption.text` renamed to `Assumption.description` per the
+confirmation. Built: `core/ontology/mental_model.py`
+(`MentalModel`, `Assumption`), `core/mental_model/model.py` (thin
+re-export, as proposed), `core/planning/target_adapter.py`,
+`core/planning/campaign_planner.py` (items 34-35), and
+`core/planning/info_gain_scorer.py`'s real scoring function (item 36 —
+now unblocked, since the field it reads, `Assumption.exploitability_score`,
+is a confirmed, non-provisional field). `data flows` remains
+unaddressed — still no citable shape for it anywhere, still flagged
+rather than dropped.
+
+## 30. `race_engine` Go test count — reconciled exactly: it was 16, not 15, from the very first commit; the "15+16" figure is a stale assertion in one historical commit message, not a real change anywhere in code
+
+Traced per instruction A, not left as "not investigated further."
+`race_test.go` and `scope_guard_test.go` (the two Go test files under
+`services/race_engine/`) were each touched in exactly one commit,
+`0c9b4df` (Week 0), and are byte-identical from that commit through the
+current HEAD (`7905292`) — confirmed by direct diff, zero differences,
+so no later commit could have added or removed a test either. Counted
+at `0c9b4df` directly: `race_test.go` has 7 `Test` functions,
+`scope_guard_test.go` has 9 — 16 total, matching the actual current
+`go test -v ./...` output exactly (also 16). Commit `c9ee6f7`'s message
+("Go race_engine + smuggling_engine still 15+16 passing") is the source
+of the "15" figure; confirmed via `git show --stat c9ee6f7` that this
+commit touched zero files under `services/` — it was a pure Python fix
+(keyring backend error handling) whose message asserted the Go counts
+were unchanged by it ("still 15+16"), not a freshly-measured count. The
+figure was wrong (or already stale) at the time that message was
+written; it was never corrected because commit messages here aren't
+rewritten after the fact, and nothing downstream ever depended on the
+prose in an old commit message being accurate. No code or test change
+follows from this — the real count was always 16, and always has been.
+
+## 31. `core/governance/scope_enforcer.py` — no Section 12 week assignment anywhere; built now, following the SAME already-established policy as items 4 and 9
+
+Found while implementing item 28's resolution: `browser_tool.py`'s
+Section 3 scope-check skeleton calls `scope_enforcer.is_allowed(url)`,
+but `scope_enforcer.py` did not exist anywhere in this repository, and —
+separately from the Week 3-vs-6 conflict already resolved in item 28 —
+grepping every `scope_enforcer` mention in the blueprint (Sections 2, 3,
+4.4, 7.28, 10.1, 10.2, 14, 16) turns up zero explicit week assignment
+for *creating* the file itself. Week 6's row only ever *adds*
+`credential_validation_allowlist` "in `scope_enforcer.py`," presupposing
+the file already exists by then.
+
+**This is precedent-following, not a novel judgment call.** It is the
+exact same gap class already settled twice in this log: item 4
+(`BudgetProfile` — "no week explicitly names this in Section 12... It
+will land whenever `config.py`/`AgentConfig` is first substantively
+built, or no later than Week 7 if that comes first") and item 9
+(`token_throttler.py` — "Grep-verified: zero hits inside Section 12's
+build-order table... Same shape as item 4's `BudgetProfile` gap,
+resolved the same way: identify the actual first consumer, land it
+there"). The standing policy those two entries already established:
+*content fully specified elsewhere + missing week tag + a real, current
+consumer* → build it against its first consumer, cite the gap, move on.
+`scope_enforcer.py` satisfies all three exactly as `token_throttler.py`
+did: Section 4.4 gives its logic verbatim (fully specified), Section 12
+never assigns it a week (missing tag), and `browser_tool.py` — a live
+Week 3 deliverable — is its first real consumer. Distinguished
+explicitly (see item 32 below, corrected) from a DIFFERENT gap shape
+this same session initially conflated it with: content that is *not*
+specified anywhere, which items 4/9's policy was never meant to cover
+and does not apply to.
+
+Same gap shape as `approval_manager.py`/`telegram_bot.py`
+(`safety_gate.py`'s own docstring; this file's `IntentEngine`
+discussion) in the sense of "referenced everywhere, owned nowhere in
+Section 12" — but handled differently, deliberately: those are stubbed
+behind a fail-closed `Protocol` because the real thing is an
+asynchronous, human-mediated round trip that cannot be partially built.
+Scope checking has no such property: Section 4.4 gives the complete,
+deterministic wildcard-matching logic verbatim, and a fail-closed stub
+here would make `browser_tool.py` permanently non-functional rather
+than failing closed on a rare path.
+
+**Built:** `_is_scope_allowed` and `is_allowed(url, scope_domains, *,
+caller_id=None)`, transcribed from Section 4.4 (v6.5/V6.4-M2 fix)
+exactly, including the explicit `caller_id` parameter for future Week 6
+use. Reuses `scope_config_generator.load_scope_domains` for reading
+`configs/scope.yaml` rather than adding a second YAML parser (that
+module's own docstring: "the single place that knows how to read
+configs/scope.yaml").
+
+**Deliberately NOT built:** `is_allowed_outbound`/`METADATA_HOSTS`/the
+`.interactsh.com` exception (Section 4.4 titles that code block "Python
+HTTP layer" specifically; `browser_tool.py`'s own skeleton never calls
+it; `intercepting_client.py` — the actual consumer — is Week 5). The
+`credential_validation_allowlist` exemption branch inside `is_allowed`
+(explicitly Week 6, Section 12). Wiring into `RateLimitedClient` (Week
+5) or `call_target()` (Week 6). 17 tests, real `configs/scope.yaml`
+exercised directly in one of them (not fixture-only).
+
+## 32. `BrowserCapture` — CORRECTED: this was a (B)-shaped gap (content unspecified) wrongly given (C)-shaped treatment (missing week tag only); fields now PROVISIONAL, not committed
+
+**Self-correction, flagged by the project owner and independently
+re-confirmed here, not disputed.** The original version of this entry
+argued `BrowserCapture` could be built now, minimally, because its
+"blast radius" was smaller than `MentalModel`'s. That reasoning
+conflated two genuinely different situations: `scope_enforcer.py`
+(item 31) and `token_throttler.py` (item 9) are missing ONLY a week
+number — their actual content is given verbatim elsewhere in the
+blueprint. `BrowserCapture`, like `MentalModel`, is missing the content
+itself: no field list exists anywhere in the blueprint (grep-confirmed,
+one bare type-annotation mention total), which is the same category of
+gap `ExploitCandidate`/`PoC` got deferred entirely for in Week 1 — and
+which this same session correctly withheld from committed code for
+`MentalModel` two entries above, but inconsistently did not withhold
+for itself here. "Fewer consumers this week" was true but irrelevant:
+it affects blast radius if the guess is wrong, not whether a guess is
+being made. It was.
+
+**Corrected status: PROVISIONAL**, per rule (B) — proposed with cited
+grounding, marked unmistakably, built on top of because blocking is
+worse than a marked guess, but not treated as settled.
+
+**Confirmed field spec (this reply), replacing the original field
+list:** `requested_url: str`, `final_url: str`, `html: str`,
+`status_code: int | None` — same shape as originally written, renamed
+`status` → `status_code` for clarity, now standing on an actual
+citation rather than the field-list author's own judgment: kept
+deliberately minimal because `JSAnalysisResult` (Section 3,
+`surface.py`) already owns structured JS-specific findings (endpoints,
+secrets, DOM sinks, frameworks) — `BrowserCapture` is only the raw page
+fetch feeding into it and into `MentalModelBuilder`'s parsing, not a
+second place for those same findings to live.
+
+`core/ontology/browser.py` and its docstring updated accordingly:
+`status` renamed to `status_code`; module and class docstrings now say
+PROVISIONAL explicitly, with the corrected reasoning above rather than
+the original blast-radius argument. Tests updated to match the renamed
+field.
+
+## 33. Section 3 vs. Section 6.3 — `mental_model/` Groq-call numbering reconciled as a bookkeeping mismatch, not a hard-stop contradiction
+
+**The mismatch, independently re-verified against both cited sections
+directly (not accepted from characterization alone):** Section 6.3
+numbers four Groq calls: (1) business purpose + roles + data flows, (2)
+trust boundaries, (3) developer assumptions, (4) exploitability
+scoring. Section 3's `mental_model/` tree instead labels
+`boundary_identifier.py` "Groq call 1: trust boundary synthesis" —
+Section 6.3's call *(2)*, not *(1)* — and no file anywhere in Section
+3's tree is named for "business purpose + roles + data flows" at all
+(`role_mapper.py`/`flow_tracer.py` are both explicitly "Local 7B,
+recon_architect persona," not Groq, per their own Section 3 comments).
+`assumption_extractor.py` is Section 3's "call 2" (developer
+assumptions — Section 6.3's call *(3)*), and `exploitability_scorer.py`
+is Section 3's "calls 3+4" (Section 6.3's call *(4)* alone).
+
+**Why this is reconciled, not a hard stop:** both sections agree on the
+one number that actually matters for a budget/scope decision — exactly
+4 total Groq calls for `MentalModelBuilder` (Section 6.3 explicitly;
+Section 8.4's "MentalModelBuilder: 4 (`groq_strategy_model`)"; Section
+9.3's table, same figure) — and roughly agree on the four categories of
+content those calls must produce collectively. The disagreement is
+which FILE's label corresponds to which NUMBER, not two incompatible
+values for the same field (contrast item 28's genuine Week-3-vs-6
+double-booking, or item 4's real 3-vs-4 `BusinessValue` member-count
+conflict) — nothing here would come out wrong if built either way,
+because nothing yet consumes a specific "call N" label as data.
+
+**Working reading, adopted for planning purposes, not asserted as
+blueprint-cited fact:** `boundary_identifier.py`'s single Groq call
+produces BOTH business-purpose/roles/data-flows AND trust boundaries in
+one structured response — Section 3's comment names only the headline
+output (trust boundaries), not everything that call's response
+actually contains. This accounts for the otherwise-unassigned "business
+purpose + roles + data flows" content without inventing a fourth
+mental_model/ file Section 3 never lists, and keeps the total at
+exactly 1 (`boundary_identifier`) + 1 (`assumption_extractor`) + 2
+(`exploitability_scorer`, "calls 3+4") = 4, matching every cross-section
+total. Flagged as a reading, not a fact, because nothing in either
+section explicitly confirms one call's response covers both topics —
+if built, `boundary_identifier.py`'s response schema should be designed
+against this reading explicitly, and revisited if that turns out wrong
+once real Groq-calling code exists.
+
+Does not block anything built this session: none of `target_adapter.py`,
+`campaign_planner.py`, or `info_gain_scorer.py` depend on this numbering,
+and the six actual Groq/local-7B-calling files
+(`role_mapper.py`/`flow_tracer.py`/`boundary_identifier.py`/
+`assumption_extractor.py`/`exploitability_scorer.py`/`builder.py`) are
+not built this session either — see the Week 3 completion report for
+why (a materially larger, separate gap: no `config.py`, no established
+Groq/Ollama HTTP-calling pattern anywhere in this repository yet, and no
+prompt/response-schema specification anywhere in the blueprint for any
+of the four calls' actual content).
+
+## 34. `core/planning/target_adapter.py` — PROVISIONAL: interface built, weight-adjustment logic deliberately inert
+
+Section 6.4 gives exactly one sentence for this component ("uses
+`MentalModel` + `TargetAdapter` (`TargetType` enum)... ordered test plan
+and scanner weights") — no method signature, no per-`TargetType`
+adjustment values, no algorithm anywhere in the blueprint's 16 sections
+(`TargetAdapter` appears at this one location, grep-confirmed). This is
+a (B)-shaped gap (content genuinely unspecified), the same category as
+`MentalModel` before item 29's confirmation and `BrowserCapture` after
+item 32's correction — not a (C)-shaped one like `scope_enforcer.py`
+(item 31): there is no citable content to transcribe here, only a
+role description.
+
+**Built, marked PROVISIONAL:** `TargetAdapter` holds a `target_type:
+TargetType` (defaulting to `UNKNOWN`) and exposes
+`adjust_weights(base_weights) -> dict`. `adjust_weights` is the
+identity function for every `TargetType`, including `UNKNOWN` —
+deliberately, not as a placeholder oversight: no blueprint section
+gives a single concrete per-type weight adjustment for any of the 7
+`TargetType` members, and inventing a 7×29 adjustment table with zero
+citation would be exactly the magic-number fabrication the Engineering
+Constitution's config-driven rule exists to prevent, doubly so for
+BEHAVIORAL weights rather than a formatting choice. 6 tests, all
+pinning the current identity behavior explicitly (so a future real
+implementation changes these tests deliberately, not by silent
+regression) — including one confirming identity holds for all 7
+`TargetType` members, not just a couple of examples.
+
+**Also out of scope, flagged rather than silently skipped:** how a
+target actually GETS assigned a `TargetType` from recon signals in the
+first place. `ReconState` (Section 3, `core/ontology/state.py`) does
+not exist yet in this repository — there is nothing yet to classify
+FROM. Callers construct `TargetAdapter` with an already-known
+`TargetType`.
+
+## 35. `core/planning/campaign_planner.py` — PROVISIONAL: `CampaignPlan` output type invented locally (not ontology), ordering rule invented and flagged
+
+**Same (B)-shaped gap as item 34**, one level up: Section 6.4's single
+sentence never names a field list for its "ordered test plan and
+scanner weights" output. This session's own name for that output,
+`CampaignPlan`, is not blueprint-cited; Section 8.1's integration-flow
+line separately calls the same conceptual hand-off "`ReconConfig`"
+("CampaignPlanner -> ReconSubgraph: `ReconConfig`") — a different name,
+also with no field list given anywhere, so not treated as a rule-(A)
+contradiction (nothing asserts two incompatible VALUES for one field;
+there are just two informal names for a thing nothing downstream
+consumes yet, since `ReconSubgraph` doesn't exist either). Reconcile
+the naming if/when a real `ReconSubgraph` consumer is built and needs a
+specific shape — against that consumer's actual needs, not guessed now.
+
+**Placement, deliberately different from `MentalModel`/`BrowserCapture`:**
+`CampaignPlan` lives in `core/planning/campaign_planner.py` itself, NOT
+`core/ontology/`. Distinguished explicitly rather than repeating item
+32's original inconsistency under a new name: `MentalModel` is
+explicitly a `ParentState` field per Section 3's own `state.py` comment,
+and `BrowserCapture` is at least a named return-type annotation in a
+comment block — both have SOME textual tie to `core/ontology/`.
+`CampaignPlan`/`ReconConfig` has none; its only cited consumer
+(`ReconSubgraph`) is single and doesn't exist yet — the same
+low-blast-radius, single-file shape Week 2 used for
+`WebhookEvent`/`PersonaName` (items 21/23), which also live locally, not
+in `core/ontology/`.
+
+**Ordering algorithm — PROVISIONAL, invented, flagged:** "ordered test
+plan" is read as "scanners ordered by `TargetAdapter`-adjusted weight,
+descending" — the simplest reading consistent with the one cited
+sentence. `MentalModel` is accepted as a required parameter (matching
+"uses `MentalModel` + `TargetAdapter`" literally) and carried on the
+returned `CampaignPlan`, but this week's ordering logic does not read
+any of its fields — no cited rule says HOW `MentalModel` content should
+influence order, only that the component uses it. A plausible-sounding
+rule (e.g. "boost scanners relevant to identified trust boundaries")
+was deliberately not invented — that's exactly the kind of guess rule
+(B) exists to prevent. 4 tests, including one pinning that identity
+weights (this week's `TargetAdapter` behavior) flow through unchanged.
+
+## 36. `core/planning/info_gain_scorer.py` — FULLY SPECIFIED, not provisional; Section 6.7's exact formula
+
+**Different category from items 34/35, confirmed before writing any
+code, not after:** Section 6.7 gives an exact, complete formula —
+"HIGH if max(exploitability_score of relevant assumptions) >= 0.7;
+MEDIUM if 0.4 <= max < 0.7; LOW if max < 0.4" — a (C)-shaped situation
+(content fully specified) even though, like items 34/35, no explicit
+week number ties `info_gain_scorer.py` to Week 3 beyond the Week 3 row
+itself naming it directly ("`BusinessValue` in `info_gain_scorer.py`").
+Built as settled, non-provisional code accordingly — no PROVISIONAL
+marking anywhere in this module, deliberately, since there is nothing
+guessed in the threshold logic itself.
+
+**One interpretive choice, documented rather than silently resolved:**
+Section 6.7 never defines what makes an assumption "relevant" (e.g.
+relevant to a specific future `BeliefGraph` hypothesis, Week 4).
+Resolved by NOT resolving it here: `score_assumptions()` takes an
+already-filtered `list[Assumption]` and the CALLER decides what
+"relevant" means for their context; `score_mental_model()` is this
+week's own simplest reading (score every assumption in the given
+`MentalModel`, since no `BeliefGraph` exists yet to narrow the set).
+This sidesteps inventing a relevance-filter algorithm entirely, rather
+than guessing one.
+
+**Also decided, cited exactly:** `BusinessValue.UNKNOWN` (item 27) is
+excluded from this function's return values by construction — no
+threshold branch produces it; a dedicated test
+(`test_never_returns_unknown`) pins this across the full score range.
+Empty `assumptions` raises `ValueError` rather than silently defaulting
+to a threshold Section 6.7 never names for that case. 12 tests,
+including exact boundary values (0.4 and 0.7 themselves, not just
+interior examples either side) — this project's own standard for
+threshold arithmetic, not eyeballed.
+
+## 37. The six `core/mental_model/` Groq/local-7B-calling files — NOT built; a materially different, larger gap than items 34/35, not attempted as "provisional"
+
+**Not `role_mapper.py`, `flow_tracer.py`, `boundary_identifier.py`,
+`assumption_extractor.py`, `exploitability_scorer.py`, or `builder.py`.**
+Considered directly, not skipped by omission: implementing any of these
+for real requires infrastructure this repository does not have yet, at
+a scale beyond a single field list or weight table:
+
+1. **No `config.py`/`AgentConfig`** (Section 3: "`config.py` # AgentConfig
+   + all Enums + BudgetProfile") exists anywhere in this repository —
+   confirmed by directory listing. There is no structured place to read
+   `groq_strategy_model`'s live-verified model ID from at runtime (only
+   `scripts/verify_groq_models.py`'s own narrow, Week-0 preflight
+   purpose reads `configs/llm_config.yaml` directly, for a different
+   job: checking the ID is live, not making chat-completion calls with
+   it).
+2. **No established Groq or Ollama HTTP-calling pattern exists anywhere
+   in this repository.** `scripts/verify_groq_models.py` and
+   `verify_gemini_models.py` call `GET /models`-style endpoints for
+   liveness checks only — neither is a template for an actual chat/
+   completion call, request/response shape, retry policy, or error
+   mapping to `FailureCause` (Section 8.3).
+3. **No prompt content or response schema is specified anywhere in the
+   blueprint** for any of the four Groq calls (business purpose+roles+
+   data-flows synthesis; trust-boundary identification; assumption
+   extraction; exploitability scoring) or for the two "Local 7B,
+   recon_architect persona" calls (`role_mapper.py`, `flow_tracer.py`).
+   Section 6.3 names WHAT each call produces at a category level: it
+   does not specify HOW to ask a model for it or what shape to parse
+   back.
+
+**Why this is not treated as rule (B) ("write a provisional proposal,
+mark it, keep building")**, unlike items 34/35: a provisional version
+of `TargetAdapter`/`CampaignPlan` was a small, bounded, reasoned
+inference from an actual cited hint (Section 2.5's Context Window
+placeholders, in `MentalModel`'s case; a single descriptive sentence,
+in `TargetAdapter`/`CampaignPlan`'s). A "provisional" `boundary_identifier.py`
+would instead require inventing, from nothing citable: the literal
+prompt text sent to Groq, the exact JSON/structured-output schema
+expected back, retry/timeout/rate-limit handling wired to
+`token_throttler.py` (built Week 1, sitting unused for exactly this
+reason — item 9), and the actual runtime source of a live model ID
+(`config.py`, which also doesn't exist). That is not "a reasoned
+inference from a citable hint marked as a guess" — it is writing the
+entire component from nothing, four to six times over, and marking the
+result "provisional" would not change that almost none of it traces to
+the blueprint. Stopping here and naming exactly what's missing is the
+correct call for this shape of gap, not a shortfall against items
+34-36's bar.
+
+**What WOULD unblock this:** either (a) explicit design input on prompt
+content and response schema for each of the four Groq calls plus the
+two local-7B calls, or (b) authorization to design `config.py` and a
+minimal Groq/Ollama HTTP client abstraction from scratch as
+prerequisite infrastructure — itself a substantially larger, riskier
+piece of net-new design than anything built this session (items
+31/34/35's prerequisite-building was each a single, already-fully- or
+mostly-specified function; this would be original infrastructure design
+with no equivalent blueprint citation to transcribe against). Flagged
+here rather than either silently attempted or silently dropped.
+
