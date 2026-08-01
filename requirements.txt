@@ -21,6 +21,10 @@ playwright>=1.40,<2.0  # Week 3: core/browser/browser_tool.py (Section 3).
                         # already names this as a startup gate; not modified
                         # this week (cli/main.py's own preflight list isn't a
                         # Week 3 deliverable).
+ollama>=0.3,<1.0        # Week 3: core/mental_model/flow_tracer.py (local-7B
+                        # calls, Section 9.4's ollama_client.generate(model=,
+                        # prompt=, keep_alive=, options=) signature -- this
+                        # package's real API matches that citation directly).
 
 # --- dev / test only ---
 pytest>=8.0,<9.0

@@ -45,13 +45,22 @@ class TestMentalModel:
             business_purpose="E-commerce storefront",
             roles=["anonymous visitor", "authenticated customer", "admin"],
             trust_boundaries=["unauthenticated -> authenticated", "customer -> admin"],
+            data_flows=["checkout form -> payment gateway"],
             assumptions=[Assumption(description="admin panel is IP-restricted", exploitability_score=0.7)],
         )
         assert mm.business_purpose == "E-commerce storefront"
         assert mm.roles == ["anonymous visitor", "authenticated customer", "admin"]
         assert mm.trust_boundaries == ["unauthenticated -> authenticated", "customer -> admin"]
+        assert mm.data_flows == ["checkout form -> payment gateway"]
         assert len(mm.assumptions) == 1
         assert mm.assumptions[0].exploitability_score == 0.7
+
+    def test_data_flows_defaults_to_empty_list(self):
+        """item 38: data_flows added after the fact once its Section 6.3
+        citation was confirmed -- must not force every caller to supply
+        it explicitly."""
+        mm = MentalModel(business_purpose="p")
+        assert mm.data_flows == []
 
     def test_provisional_fields_have_sensible_defaults(self):
         """A caller that only supplies the four confirmed fields (e.g.

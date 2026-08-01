@@ -19,18 +19,28 @@ yet in this repository and its real eventual scope (`EndpointSignals`,
 `core/mental_model/model.py` is a thin re-export of `MentalModel` from
 here, preserving Section 3's file tree without duplicating the type.
 
-FIELD SPEC STATUS -- PARTIALLY PROVISIONAL (docs/DECISIONS.md item 29):
+FIELD SPEC STATUS -- PARTIALLY PROVISIONAL (docs/DECISIONS.md item 29,
+and item 38 for the `data_flows` addition below):
 Section 3 gives no `@dataclass` field listing for `MentalModel` anywhere
 (grep-confirmed across all ~13 occurrences of the name). The advisor
 Claude's consolidated directive supplied a confirmed spec, split into
 two tiers:
 
-  CONFIRMED, cited directly to Section 2.5's Context Window template
-  (not provisional): `business_purpose` ({business_purpose}), `roles`
-  ({role_list}), `trust_boundaries` ({boundary_list}), `assumptions`
-  ({top_3_with_exploitability} -- a list of `Assumption`, each carrying
-  the `exploitability_score` Section 6.7's `info_gain_scorer.py` reads
-  directly: "max(exploitability_score of relevant assumptions)").
+  CONFIRMED, cited directly to blueprint text (not provisional):
+    - `business_purpose`, `roles`, `trust_boundaries`: Section 2.5's
+      Context Window template (`{business_purpose}`, `{role_list}`,
+      `{boundary_list}`).
+    - `data_flows`: Section 6.3's Groq-call-1 description itself
+      ("synthesise business purpose + roles + data flows") -- no
+      Context Window placeholder names it the way `role_list`/
+      `boundary_list` do for its siblings, which is exactly why this
+      field was originally omitted and flagged rather than guessed at
+      (item 29's first pass); added here once the citation was
+      confirmed directly against Section 6.3's prose (item 38).
+    - `assumptions` ({top_3_with_exploitability} -- a list of
+      `Assumption`, each carrying the `exploitability_score` Section
+      6.7's `info_gain_scorer.py` reads directly: "max(exploitability_score
+      of relevant assumptions)").
 
   RECOMMENDED, not blueprint-cited -- PROVISIONAL, flagged explicitly
   rather than silently treated as equally authoritative:
@@ -49,21 +59,78 @@ two tiers:
   (Section 6.7's scoring reads only `assumptions[*].exploitability_score`)
   -- their absence or renaming would not break any cited computation,
   which is exactly why they're safe to carry as provisional rather than
-  needing to block on them the way the first four fields' presence does.
-
-`data flows` (Section 6.3's Groq-call-1 description, alongside business
-purpose and roles) has NO corresponding field here -- no Context Window
-placeholder hints at its shape the way `role_list`/`boundary_list` do
-for the other two, so it is omitted rather than guessed at. Flagged,
-not silently dropped: if a future week's actual Groq-calling
-implementation needs to carry this, it belongs here, added to this same
-file, not invented as an untyped dict elsewhere.
+  needing to block on them the way the first five fields' presence does.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+
+
+@dataclass(frozen=True)
+class RoleSignal:
+    """One piece of page-level evidence for a user/actor role.
+    mental_model_builder_prompt_design.md Section 2's response schema.
+
+    Attributes:
+        role: Short role name (e.g. "admin", "authenticated user").
+        evidence: The exact string/tag the model found supporting it.
+    """
+
+    role: str
+    evidence: str
+
+
+@dataclass(frozen=True)
+class FlowSignal:
+    """One piece of page-level evidence for a data flow.
+    mental_model_builder_prompt_design.md Section 2's response schema.
+
+    Attributes:
+        description: What moves, from where to where.
+        evidence: The exact string, form action, or endpoint found.
+    """
+
+    description: str
+    evidence: str
+
+
+@dataclass(frozen=True)
+class PageSignals:
+    """One fetched page's local-7B extraction result -- produced by
+    `core/mental_model/flow_tracer.py`, read by both it and
+    `core/mental_model/role_mapper.py` (one call, two readers; see
+    docs/DECISIONS.md item 39). Aggregated across up to 8 pages by
+    `builder.py` before Groq call 1.
+
+    Placed here (`core/ontology/`), not in `core/mental_model/`, for the
+    same reason as `MentalModel`/`Assumption` (item 29): a dataclass
+    consumed by more than one component belongs in the ontology, per
+    the Engineering Constitution.
+
+    Attributes:
+        page_url: The page this extraction came from (`BrowserCapture.final_url`).
+        role_signals: Role evidence found on this page. Empty list, not
+            omitted, when none found (mental_model_builder_prompt_design.md
+            Section 2: "never omit the key").
+        flow_signals: Flow evidence found on this page. Same
+            empty-list-not-omitted convention.
+        injection_marker_detected: `True` if
+            `core.mental_model._injection_guard.detect_injection_markers`
+            flagged this page's raw content as containing instruction-
+            like phrasing (docs/DECISIONS.md item 41). Detection only --
+            does not mean this page's other signals were discarded or
+            altered; a positive value is itself reportable evidence
+            (e.g. a page attempting LLM-prompt injection is arguably a
+            finding in its own right), not a reason to distrust the
+            rest of this `PageSignals` instance.
+    """
+
+    page_url: str
+    role_signals: list[RoleSignal] = field(default_factory=list)
+    flow_signals: list[FlowSignal] = field(default_factory=list)
+    injection_marker_detected: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,6 +179,14 @@ class MentalModel:
             2.5). Points in the application where trust level changes
             (e.g. "unauthenticated -> authenticated", "customer ->
             admin").
+        data_flows: Section 6.3's Groq-call-1 output, alongside
+            `business_purpose` and `roles` (e.g. "user submits payment
+            form -> processed by third-party gateway", "profile photo
+            upload -> stored in S3"). No Context Window placeholder
+            names this field the way `role_list`/`boundary_list` do for
+            its siblings -- Section 6.3's own prose ("synthesise
+            business purpose + roles + data flows") is the citation
+            (item 38).
         assumptions: Context Window `{top_3_with_exploitability}`
             (Section 2.5 shows only the top 3 for display purposes;
             this field holds the full set `MentalModelBuilder`
@@ -132,6 +207,7 @@ class MentalModel:
     business_purpose: str
     roles: list[str] = field(default_factory=list)
     trust_boundaries: list[str] = field(default_factory=list)
+    data_flows: list[str] = field(default_factory=list)
     assumptions: list[Assumption] = field(default_factory=list)
     is_partial: bool = False
     pages_analyzed: int = 0

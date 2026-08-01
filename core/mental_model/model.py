@@ -17,6 +17,12 @@ anywhere.
 
 from __future__ import annotations
 
-from core.ontology.mental_model import Assumption, MentalModel
+from core.ontology.mental_model import (
+    Assumption,
+    FlowSignal,
+    MentalModel,
+    PageSignals,
+    RoleSignal,
+)
 
-__all__ = ["Assumption", "MentalModel"]
+__all__ = ["Assumption", "FlowSignal", "MentalModel", "PageSignals", "RoleSignal"]
