@@ -1437,10 +1437,12 @@ wrapper too (breaking every comparison) or strip it unreliably (making
 the comparison untrustworthy either way). `description` already has
 its own, stronger, purpose-built integrity mechanism for this exact
 concern -- the echo check itself, which catches reordering, dropping,
-and rewording, not just oversized content. Documented directly in
-`_score_one_batch`'s own docstring, not only here, so the exception is
-visible at the point someone would next touch that code, not only in
-this log.
+and rewording, not just oversized content. `description` is also left
+unbounded in length, not just unwrapped -- truncating it would equally
+break the echo-verification match, same reasoning as the delimiter
+exclusion. Documented directly in `_score_one_batch`'s own docstring,
+not only here, so the exception is visible at the point someone would
+next touch that code, not only in this log.
 
 ## 43. Week 3 final-verification pass: two real gaps found and fixed before this entry, not after
 
