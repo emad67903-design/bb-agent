@@ -1481,3 +1481,251 @@ Whole-repo suite after both fixes and the new tests: 524 passed (up
 from 499 before this verification pass's fixes and additions), run
 together via `python3 -m pytest -q` from repo root, not per-file.
 
+---
+
+## WEEK 4 -- BeliefGraph + Persistence
+
+## 44. `belief_manager.py`'s `seed_node` follows Section 11.2's code block, not Section 3's `seed_alpha_beta` tree comment
+
+Section 3's tree comment for this file names a function
+`seed_alpha_beta(w) -> (round(w*10), 10-round(w*10))` -- one parameter,
+tuple return. Section 11.2 gives a fuller, worked-example-backed
+definition: `seed_node(vuln_type: str, w: float) -> dict` returning
+`{'alpha': a, 'beta': 10-a}`, with `w=0.65 -> alpha=7, beta=3` marked
+correct (`✓`) immediately below it -- and this week's kickoff
+instructions independently single out that same example, twice, for
+pinning as a unit test.
+
+Resolved via the precedent this project already established for exactly
+this class of disagreement (item 25, Week 3: "code blocks as
+authoritative over abbreviated tree comments throughout this document").
+Implemented `seed_node` exactly as Section 11.2 gives it. No second,
+differently-shaped `seed_alpha_beta` function was added alongside it --
+nothing in the blueprint calls that name from anywhere else, so a second
+function would be dead code motivated only by the tree comment's terser
+phrasing of the same underlying concept.
+
+## 45. `add_belief_node` -- a construction helper Section 11 never gives as a named code block; `business_value` deliberately has no default
+
+Section 11.2's `seed_node` only ever returns the two-key alpha/beta
+dict, not a full nine-attribute node. "BeliefGraph construction" is
+named as a deliverable alongside `seed_node`/`update_node`/
+`get_probability` in Section 3's tree comment and this week's kickoff
+checklist, but no code block anywhere shows what actually assembles a
+full node. `add_belief_node` is that assembler: it calls `seed_node`
+internally and fills in the remaining six attributes (`hypothesis_id`,
+`vuln_type`, `endpoint`, `exploitability_score`, `business_value`,
+`pinned_until`), then adds the result to the graph via
+`networkx.DiGraph.add_node`.
+
+`exploitability_score` defaults to `0.5`, directly citable (Section
+11.2: "from MentalModel if available; else 0.5"). `business_value` has
+no equivalent fallback anywhere in the blueprint, and deliberately gets
+none here: `BusinessValue.UNKNOWN` is documented
+(`core/ontology/enums.py`'s docstring, item 27) as reserved solely for
+`deserialize_belief_graph`'s corrupted-checkpoint fallback, "never a
+possible output of `info_gain_scorer.py`'s own scoring function."
+Defaulting a fresh node's `business_value` to `UNKNOWN` would silently
+extend that reservation to a second, unrelated meaning ("not yet
+computed") the blueprint never assigns it. Callers must supply a real
+`BusinessValue` (computed by `info_gain_scorer.py`, Section 6.7) before a
+node is added; omitting it is a `TypeError` (keyword-only, no default),
+not a silent `UNKNOWN`.
+
+## 46. CRITICAL: Section 11.2's own code and its own worked example directly contradict each other -- `round(w * 10)` is not Python's `round()`
+
+Found while smoke-testing the literal transcription of Section 11.2's
+code before writing any tests (this week's amendment #3, "independently
+re-verify it yourself first... actual pytest run," caught this before it
+ever reached a test file, let alone a commit).
+
+Section 11.2's code reads `a = round(w * 10)`. The comment two lines
+below it reads `# w=0.65 → alpha=7, beta=3 → mean=0.70 ≈ prior ✓`.
+Executed literally: `0.65 * 10 == 6.5` exactly (confirmed via
+`decimal.Decimal(0.65 * 10)` -- no floating-point drift, a clean `6.5`),
+and Python's built-in `round()` uses round-half-to-even ("banker's
+rounding"): `round(6.5) == 6`, not 7, because 6 is the nearest even
+integer. A literal transcription of the code produces `{'alpha': 6,
+'beta': 4}` for the blueprint's own headline example, directly
+contradicting the `✓` the blueprint places next to `alpha=7, beta=3`
+one line later.
+
+This is an internal contradiction within a single code block (code vs.
+its own adjacent comment), not a disagreement between two sections --
+still a Category (A) contradiction under this week's STOP-condition
+protocol, resolved rather than halted because the resolution direction
+is unusually well evidenced from three independent angles:
+
+1. The worked example is the one Section 11.2 itself marks correct
+   with `✓`.
+2. This week's kickoff instructions independently single out
+   `w=0.65 -> alpha=7, beta=3` for pinning as an explicit unit test,
+   twice, with no mention of 6/4 anywhere.
+3. Checked programmatically against all ten distinct `starting_weights`
+   values actually used in Section 9.5's `vuln_weights.yaml`, three
+   (0.25, 0.45, 0.65) diverge between Python's `round()` and
+   round-half-up. This is not a one-off quirk of the example value --
+   left as Python's built-in, it would silently mis-seed roughly 30% of
+   the 29 vuln types' cold-start alpha/beta pairs by exactly 1, with no
+   exception and no visible symptom short of re-deriving the blueprint's
+   own arithmetic by hand.
+
+Implemented as `math.floor(w * 10 + 0.5)` -- standard round-half-up,
+exact and safe over the non-negative domain Section 11.2 itself
+specifies for `w` ("[0.0, 1.0]"). Pinned as
+`test_regression_python_builtin_round_would_give_wrong_answer` in
+`tests/core/cognitive/test_belief_manager.py`, which asserts both that
+Python's own `round(6.5) == 6` (so the regression pin itself doesn't go
+stale silently if a future Python version ever changes this) and that
+`seed_node` does not reproduce that answer.
+
+## 47. Pruning rules: time basis for rule 1, exemption precedence, and `prune_graph` as evaluation-only
+
+Three sub-decisions on the same function, grouped here because they're
+all about the same eight lines of Section 11.2 prose:
+
+**Time basis for rule 1.** Section 11.2's first rule reads
+"`get_probability(n) < 0.05` for 10+ min -> prune candidate" without
+naming which field supplies "10+ min," unlike rule 2, which explicitly
+names `last_updated`. Section 11.2's node schema has exactly one
+timestamp field; no second field exists anywhere to track "how long has
+probability been below 0.05" independently of when the node last
+changed alpha/beta. Reusing `last_updated` as the shared time basis for
+both time-based rules is the only reading that doesn't require inventing
+an unspecified tenth attribute onto Section 11.2's otherwise-exhaustive
+nine-key node dict.
+
+**Exemption precedence.** The two "never prune" rules
+(`exploitability_score > 0.8`, `pinned_until > utcnow()`) are checked
+first and short-circuit the two "prune" rules. Implied directly by the
+word "never" in Section 11.2's own bullet text, not an independent
+invention -- a node that is both stale/low-probability AND pinned or
+highly exploitable is kept either way.
+
+**`prune_graph` is rule evaluation only, not a scheduler.** Section
+11.1's `pruning_interval` (300 seconds) is the cadence at which some
+future caller should invoke `prune_graph` periodically; no session loop
+exists yet in this codebase to host that cadence (no
+`agent_self_monitor.py`-equivalent scoped to BeliefGraph pruning
+specifically) -- the same "framework built, calling infrastructure
+deferred" boundary already applied to `token_throttler.py` (item 9) and
+`route_tier_d_action` (Week 2). `pruning_interval` stays recorded in
+`BELIEF_GRAPH_LIMITS` for whenever that scheduler is built; nothing in
+`belief_manager.py` reads it yet.
+
+Tested directly: each of the four rules has its own dedicated test
+(including the boundary case of `exploitability_score` sitting exactly
+at 0.8 -- Section 11.2 says "> 0.8," so 0.8 itself does not exempt --
+and `pinned_until` sitting in the past, which likewise does not exempt),
+plus a mixed-graph test confirming `prune_graph` removes only the nodes
+that actually match.
+
+## 48. `belief_manager.py` uses timezone-aware `datetime.now(timezone.utc)`, not Section 11.2's literal `datetime.utcnow()`
+
+Section 11.2's `update_node` body literally calls `datetime.utcnow()`
+(naive, no `tzinfo`). This module uses `datetime.now(timezone.utc)`
+(aware) throughout instead, matching a convention already established
+twice elsewhere in this codebase before this week touched it --
+`core/governance/scope_config_generator.py:158` and
+`core/mental_model/builder.py:260` (`MentalModel.built_at`) both already
+use `datetime.now(timezone.utc)`.
+
+This is a deviation from a literal transcription, not from the
+blueprint's intent: mixing naive and aware datetimes in the same
+process raises `TypeError` on comparison, and Section 11.2's own pruning
+rules require comparing `pinned_until` against "now"
+(`pinned_until > utcnow()`). Since a `BeliefGraph` node's `pinned_until`
+and a `MentalModel.built_at` may plausibly need comparing against the
+same "now" in future code once `ParentState` exists and ties them
+together, staying on the codebase's already-established aware
+convention is the lower-risk reading of "get the current UTC time" than
+a literal transcription that would reintroduce a naive/aware split this
+project has twice already avoided by choosing the aware form. Callers of
+`add_belief_node` must supply aware datetimes for `pinned_until`; the
+round-trip tests assert `tzinfo is not None` after every serialize/
+deserialize cycle, not just successful comparison.
+
+## 49. Pre-build scope checks confirmed, both documented as this week's kickoff instructions required
+
+**`core/cognitive/` dependency check.** Verified before writing any code
+(`find core/cognitive -type f`): exactly one file existed,
+`persona_router.py` (Week 2). `belief_manager.py` has no genuine
+dependency on `ToolSelector` or `ContextWindow` -- every function
+Section 11.2 specifies takes a bare `graph` parameter and operates on it
+directly; nothing in Section 11 calls into tool selection or context
+windowing. Per this week's kickoff instructions ("If it doesn't need
+them, say so explicitly and proceed"), neither was built or stubbed this
+week.
+
+**"Self-healing" reading.** Grepped the full blueprint
+(`grep -ni "self.healing"`) before assuming the pruning rules are what
+the Week 4 row title means by it: exactly one match, the row title
+itself (Section 12, "BeliefGraph + Self-Healing + Persistence"). Zero
+occurrences anywhere in Section 11's body, or anywhere else in the
+document. This matches the pattern this project has already flagged
+twice (TriggerRouter, Week 2; "Tactical Loop," Week 3 -- still open):
+a Section 12 row title naming something the row's own body text never
+mentions by that name. Documented reading, per this week's kickoff
+instructions: the pruning rules (Section 11.2's four bullets) are the
+only mechanism in this week's actual scope that plausibly fits a
+"self-healing" description (a graph that autonomously sheds stale/
+unpromising hypotheses without human intervention) -- but nothing in
+Section 11 itself uses that term, so this is this week's interpretation
+of an unlabeled title, not a blueprint-cited fact. No code artifact
+(function name, module name, log tag) uses the string "self-healing"
+anywhere in this week's implementation, to avoid asserting a citation
+that doesn't exist.
+
+## 50. `session_persistence.py` scope: Phase-2 trigger only, `MentalModel`-only payload, fail-closed `CheckpointStore` Protocol
+
+Three sub-decisions on one file, same reasoning thread:
+
+**Trigger scope.** Section 3's tree comment, Section 6.11 item 4, and
+Section 8.2 all separately name two claims: an initial checkpoint after
+Phase 2, and a recurring one every 15 minutes "during active scanning."
+This week's kickoff instructions explicitly scope only the first,
+flagging the periodic mechanism as "a separate, not-yet-assigned piece."
+Built: `checkpoint_after_phase2`, firing once. Not built: any
+timer/scheduler for the 15-minute cadence -- it needs a running-session
+concept (something alive "during active scanning") that doesn't exist
+anywhere in this codebase yet.
+
+**Payload scope.** No blueprint section anywhere gives a checkpoint
+payload schema. The one concrete thing Section 6.3 says exists at the
+trigger moment is the `MentalModel` itself. `ParentState` -- which
+Section 3's `state.py` tree comment says actually holds `mental_model`
+as one field among several siblings (`ReconState`, `TestingState`,
+`ChainBudget`, `MemoryDecayPolicy`, `context_window_snapshot`,
+`js_findings`) -- does not exist in this repository (already flagged by
+`core/mental_model/model.py`'s own docstring, Week 3, for an unrelated
+reason). `checkpoint_after_phase2` therefore checkpoints `MentalModel`
+alone; checkpointing the rest of `ParentState` is deferred to whichever
+future week actually builds it.
+
+**Storage backend.** Section 8.2 names the destination ("PostgreSQL")
+but gives no schema, driver, or connection contract anywhere, and this
+sandbox has no live `postgres_connection` capability (item 7: fails
+closed here by design). Applied the identical fail-closed `Protocol`
+pattern `safety_gate.py`'s `ApprovalManagerProtocol` already established
+in Week 2 for the structurally identical situation (a named-but-unbuilt
+external dependency): `CheckpointStore` is the minimal interface a
+future PostgreSQL-backed implementation must satisfy, and
+`checkpoint_after_phase2` raises `CheckpointStoreUnavailable` when
+`store=None` rather than silently skipping the checkpoint or inventing
+an ad hoc local-file fallback Section 8.2 never authorized.
+
+## 51. Prompt-injection amendment: verified not applicable this week
+
+This week's kickoff instructions extend the Week 3 prompt-injection
+precedent (`core/mental_model/_injection_guard.py`, items 40-42) to any
+new component that "takes target-derived or LLM-derived content and
+embeds it in another LLM prompt." Checked against both files built this
+week: `belief_manager.py` makes no LLM calls and constructs no prompts
+(every function operates on a bare `networkx.DiGraph`); `session_
+persistence.py` makes no LLM calls and constructs no prompts (it hands a
+`MentalModel` to a storage interface, not to a model). Neither
+component's data ever reaches an LLM prompt boundary, so the amendment
+doesn't apply -- recorded here rather than left unaddressed, per the
+same "explicit reading, not silent absence" standard applied to item 49.
+
+
