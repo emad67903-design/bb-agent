@@ -1477,7 +1477,13 @@ mismatch between modules built on different days of the same week is
 exactly the kind of thing no single module's own isolated test suite
 would ever catch on its own.
 
-Whole-repo suite after both fixes and the new tests: 524 passed (up
+Whole-repo suite after both fixes and the new tests: 527 passed [corrected
+from an original "524 passed" here -- self-discovered during Week 4's
+independent re-verification pass (checked out this commit and 872d718
+directly, ran pytest fresh at both, got 527 at both, confirmed 872d718
+touches no test files) and left unfixed in the text at the time; closed
+now rather than left inaccurate in the log this project treats as its
+source of truth on exactly this kind of claim] (up
 from 499 before this verification pass's fixes and additions), run
 together via `python3 -m pytest -q` from repo root, not per-file.
 
@@ -1727,5 +1733,198 @@ persistence.py` makes no LLM calls and constructs no prompts (it hands a
 component's data ever reaches an LLM prompt boundary, so the amendment
 doesn't apply -- recorded here rather than left unaddressed, per the
 same "explicit reading, not silent absence" standard applied to item 49.
+
+---
+
+## WEEK 4 → WEEK 5 GATING ITEMS
+
+*(Raised by the advisor between Week 4's approval and Week 5's start;
+resolved here per explicit instruction before any Week 5 code is
+written.)*
+
+## 52. R-H3 revised: `_should_suppress_body`'s body extension must branch on Content-Type, not decode-then-scan uniformly
+
+The proposal in this document's prior draft of this item (a single raw
+substring scan over the decoded request body, regardless of
+content-type) had a real gap, caught on review, not by this session:
+the query-string path decodes percent-encoding for free, because
+`urllib.parse.parse_qs()` un-quotes every value it returns as a normal
+part of parsing. The proposed body path did not — it was `decode("utf-8")`
+then a raw substring scan, nothing else.
+
+Verified directly, not taken on the reviewer's word alone:
+
+```python
+>>> body = "url=http%3A%2F%2F169.254.169.254%2Flatest%2Fmeta-data%2Fami-id"
+>>> "/latest/meta-data/" in body                       # raw substring scan
+False                                                   # MISSES IT
+>>> urllib.parse.parse_qs(body)["url"][0]
+'http://169.254.169.254/latest/meta-data/ami-id'
+>>> "/latest/meta-data/" in urllib.parse.parse_qs(body)["url"][0]
+True                                                    # parse_qs() catches it
+```
+
+A `POST` with `Content-Type: application/x-www-form-urlencoded` and
+body `url=http%3A%2F%2F169.254.169.254%2Flatest%2Fmeta-data%2Fami-id`
+would have been caught if the same payload arrived as a query string
+(Section 10.5's existing `parse_qs()`-based check decodes it
+automatically), but sailed through the proposed body check unchanged —
+the literal substring `/latest/meta-data/` never appears in the still-
+percent-encoded body text.
+
+**Revised proposal — branch on `Content-Type`:**
+
+```python
+def _should_suppress_body(
+    request_path: str,
+    full_request_url: str,
+    request_body: str | bytes | None = None,
+    content_type: str | None = None,
+) -> bool:
+    # 1. Direct metadata path (unchanged, Section 10.5)
+    if any(request_path.startswith(p) for p in METADATA_SUPPRESS_PATHS):
+        return True
+    # 2. Query parameter values (unchanged, Section 10.5)
+    parsed = urllib.parse.urlparse(full_request_url)
+    for values in urllib.parse.parse_qs(parsed.query).values():
+        for v in values:
+            if any(v.startswith(p) or p in v for p in METADATA_SUPPRESS_PATHS):
+                return True
+    # 3. Request body -- branches on Content-Type rather than treating
+    #    every body the same way.
+    if request_body:
+        body_text = (
+            request_body.decode("utf-8", errors="ignore")
+            if isinstance(request_body, bytes) else request_body
+        )
+        if content_type is not None and "application/x-www-form-urlencoded" in content_type:
+            # Same shape as a query string, just delivered in the body --
+            # reuse the identical parse_qs()-based decode-then-check
+            # rather than a second, differently-behaved implementation.
+            # Substring match on content_type, not equality: a real
+            # Content-Type header commonly carries a charset parameter
+            # ("application/x-www-form-urlencoded; charset=UTF-8"),
+            # which equality would miss.
+            for values in urllib.parse.parse_qs(body_text).values():
+                for v in values:
+                    if any(v.startswith(p) or p in v for p in METADATA_SUPPRESS_PATHS):
+                        return True
+        else:
+            # JSON, plain text, or unrecognized/absent content-type: a
+            # raw substring scan, as originally proposed. JSON string
+            # values are not percent-encoded in practice, so this single
+            # pass also catches nested JSON (`{"a":{"b":"http://..."}}`)
+            # without needing a recursive parser.
+            if any(p in body_text for p in METADATA_SUPPRESS_PATHS):
+                return True
+    return False
+```
+
+**Conscious limitation, documented rather than chased this pass:**
+base64 (or other non-percent) encoding of a metadata URL inside a body
+would still evade this function — not attempted here, per explicit
+instruction. This is accepted because `_should_suppress_body` is a
+defense-in-depth *logging suppression* layer, not the primary SSRF
+gate: `scope_enforcer.py` (blocks/permits the outbound request itself)
+and the scanner-level verifiers (`ssrf_verifier.py`'s IMDSv2 conditional
+logic, Section 7.3) are the actual security-relevant checks. Under-
+detection here means an already-permitted response body gets logged
+when ideally it wouldn't — a telemetry/data-hygiene miss, not a bypassed
+attack — which is a materially different failure mode than under-detection
+in `scope_enforcer.py` would be, and is why chasing every encoding
+scheme in this one layer isn't the right place to spend effort this
+pass.
+
+Still not committed as running code — `core/http/` doesn't exist yet;
+this is the scoped design Week 5 builds `InterceptingClient`'s body
+handling directly against.
+
+## 53. `ExploitCandidate` → `findings.py`, PROVISIONAL — counter-consideration recorded explicitly
+
+Confirmed no live code conflict exists: `core/ontology/surface.py`
+doesn't exist yet, and `core/ontology/findings.py` has no
+`class ExploitCandidate` — only comments acknowledging item 10's
+original deferral. The conflict is entirely in the blueprint's own
+Section 3, unresolved since item 10 (Week 1):
+
+```
+│   │   ├── surface.py
+│   │   │   # EndpointSignals, SurfaceData, AttackEdge, AttackGraph
+│   │   │   # ExploitCandidate fields
+```
+```
+│   │   ├── findings.py
+│   │   │   # Finding, Evidence, ExploitCandidate, PoC, EvidenceChain, TriageResult
+```
+
+**Winning argument (this session):** `findings.py`'s comment lists
+`ExploitCandidate` as a full peer inside one list; four of the other
+five members of that same list (`Finding`, `Evidence`, `EvidenceChain`,
+`TriageResult`) are already confirmed, by direct inspection, to
+actually live in `findings.py`. `surface.py`'s mention is a separate,
+bare line — "ExploitCandidate *fields*," not "ExploitCandidate" — read
+as a cross-reference (surface.py's `EndpointSignals`/`AttackGraph`
+supplying data that populates some of `ExploitCandidate`'s eventual
+fields) rather than a second ownership claim.
+
+**Counter-consideration, explicitly recorded per the reviewer's
+instruction, not just the winning side:** item 10 (Week 1) originally
+weighed Section 8.1's flow description — `"FastLane → BeliefGraph:
+ExploitCandidate list"` — as a signal that `ExploitCandidate` is
+thematically a Fast-Lane/scanner-output concept: it is *produced by*
+the 29 scanners during Fast Lane (Section 7.10's usage, `lfi_scanner.py`
+"returns 0 ExploitCandidates," is the same signal from a different
+angle), which is exactly the role `surface.py`'s other confirmed
+inhabitants (`EndpointSignals`, `SurfaceData`, `AttackEdge`,
+`AttackGraph`) already play — raw attack-surface/reconnaissance
+concepts, upstream of and thematically distinct from `findings.py`'s
+verification-pipeline family (`Finding`, `Evidence`, `PoC`,
+`EvidenceChain`, `TriageResult`, all downstream of a scanner signal
+having already been through triage). This thematic argument was not
+addressed by this session's textual-structure argument above, and
+remains real: a strong case can be made that a scanner's raw output
+belongs with the other raw-scanner-output types, not with the
+post-triage verification types, regardless of which file's comment
+lists it more explicitly.
+
+**Resolution: `findings.py`, held PROVISIONAL, not final.** The textual
+argument is judged strong enough to decide a provisional call now,
+given Week 5 needs *some* answer before wrapping 29 scanners as tools.
+The thematic counter-consideration is not rebutted, only outweighed for
+now — flagged explicitly so a future pass (most plausibly once Week 5's
+actual usage forces a concrete field list, the way item 10 always
+anticipated) can revisit if the Fast-Lane-thematic fit turns out to
+matter more in practice than the list-structure argument suggests today.
+
+Field shape remains a fully separate, still-open question (item 10's
+second question) — resolving file ownership here does not resolve or
+imply any field list.
+
+## 54. `mental_model_builder_prompt_design.md` reconstructed as-built, not recovered
+
+The original document (items 38–39's "the advisor Claude's follow-up
+design document") is confirmed unrecoverable in this environment —
+absent from all six git bundles (`week0` through `week3-final`),
+`/mnt/transcripts`, `/mnt/project`, and `/mnt/user-data/uploads`. The
+reviewing advisor instance independently confirmed it has no access to
+the original either.
+
+`docs/mental_model_builder_prompt_design.md` was written instead,
+directly from the six as-built files' actual prompts, response schemas,
+and documented design rationale (read from source on 2026-08-02, not
+from any memory of the original design conversation, which this session
+was never party to). Titled explicitly as a reconstruction, not a
+recovery, per instruction. Section numbers (1 through 7) were chosen to
+match what the twelve citing files already reference, so those
+citations resolve correctly against the new document rather than
+requiring twelve separate edits — this is a citation-compatibility
+choice, not a claim that these are the original section numbers.
+
+The new document's own closing line states the intended authority
+relationship going forward: if it's ever found to diverge from the six
+files' actual behavior, the code is ground truth and the document
+should be corrected to match, not the reverse — the same direction this
+document was produced in.
+
 
 
