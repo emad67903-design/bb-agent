@@ -3,6 +3,6 @@
     "*.example.com",
     "example.com"
   ],
-  "generated_at": "2026-07-21T20:18:40.714106+00:00",
-  "source": "/home/claude/bb-agent/configs/scope.yaml"
+  "generated_at": "2026-08-05T11:30:54.193166+00:00",
+  "source": "/home/claude/verify/bb-agent/configs/scope.yaml"
 }

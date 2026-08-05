@@ -27,7 +27,16 @@ ollama>=0.3,<1.0        # Week 3: core/mental_model/flow_tracer.py (local-7B
                         # calls, Section 9.4's ollama_client.generate(model=,
                         # prompt=, keep_alive=, options=) signature -- this
                         # package's real API matches that citation directly).
+httpx>=0.27,<1.0        # Week 5: core/http/intercepting_client.py -- the
+                        # ONE sanctioned place this project imports httpx
+                        # directly (base_scanner.py's CI hook bans it
+                        # everywhere under core/scanners/).
 
 # --- dev / test only ---
 pytest>=8.0,<9.0
 pytest-mock>=3.12,<4.0
+pytest-asyncio>=0.23,<1.0   # Week 5: core/http/ is async (InterceptingClient/
+                            # RateLimitedClient wrap httpx.AsyncClient, matching
+                            # browser_tool.py's existing async precedent and
+                            # SolverPool's stated concurrency requirement,
+                            # Section 6.6) -- needed to run `async def test_*`.

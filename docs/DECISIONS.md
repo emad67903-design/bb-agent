@@ -1926,5 +1926,245 @@ files' actual behavior, the code is ground truth and the document
 should be corrected to match, not the reverse — the same direction this
 document was produced in.
 
+---
+
+## WEEK 5 -- Tool-ify + Chain Engine + InterceptingClient
+
+## 55. Tool-ify delivers the MECHANISM, not "29 scanners as tools" literally -- `SCANNER_REGISTRY` is empty at week's end
+
+Stated explicitly, per the advisor's required addition, so this isn't
+misread later as "done": under this week's approved tool-ify scoping
+(the pre-Week-5 investigation into Section 12's Week 5/Week 7 rows,
+`base_scanner.py`, and `SCANNER_REGISTRY`), Week 5 does **not** deliver
+"29 scanners as tools" in any literal sense. `SCANNER_REGISTRY`
+(`core/scanners/registry.py`) starts and ends this week as an empty
+dict -- confirmed by its own tests, which register only dummy
+`BaseScanner` subclasses, never a real vulnerability scanner, because
+none exist yet. No scanner exists to register until Week 7 builds the
+29 concrete scanner classes (Section 12's own Week 7 row: "All 29
+scanner harnesses").
+
+What Week 5 actually delivers is the **mechanism**: `base_scanner.py`'s
+HTTP-enforcement contract, `SCANNER_REGISTRY`'s register/lookup/
+`create_scanner` machinery, and `RateLimitedClient`'s `caller_id`
+wiring (Section 4.4) -- together, the thing that makes a scanner
+registrable as a scope-safe, uniquely identified tool, once Week 7
+actually writes one. Verified concretely: `create_scanner()` builds a
+fresh `RateLimitedClient` with `caller_id=scanner_id` for whatever gets
+registered under that id, embodying Section 4.4's "`caller_id` is set
+once, at `SCANNER_REGISTRY` instantiation time... carried on the
+scanner's `RateLimitedClient` instance" -- this is the literal
+mechanism that sentence describes, tested end-to-end with a dummy
+scanner, ready for Week 7 to plug 29 real ones into without changing
+this week's code.
+
+## 56. `SCANNER_REGISTRY`'s file location: `core/scanners/registry.py`, not `__init__.py`
+
+Per the advisor's answer to this week's own flagged open question: no
+blueprint section gives `SCANNER_REGISTRY` a file path at all (grep-
+confirmed -- all three mentions are the same sentence about
+`caller_id`). This project's convention keeps `__init__.py` minimal/
+export-only; a registry with real registration logic (a dict, a
+`register()` decorator, `create_scanner()`) is substantial enough to
+earn its own named file, the same as `token_throttler.py` or
+`session_persistence.py` did rather than living in an `__init__.py`.
+
+## 57. `base_scanner.py`: HTTP-enforcement contract only -- scan/execute method deliberately, permanently absent this week
+
+Per explicit instruction: no `scan()`/`execute()`/`run()` method was
+written, not even as an abstract stub with a placeholder signature.
+`BaseScanner` carries only the one piece Section 3 actually specifies
+(`self.session: RateLimitedClient`, enforced by CI rather than a
+runtime `isinstance` check) and inherits from `abc.ABC` without any
+`@abstractmethod` -- Python permits this; it signals the intended
+inheritance contract without yet having anything to force subclasses to
+implement. Pinned by its own test
+(`test_deliberately_has_no_scan_or_execute_method`): if a future week
+adds one of these method names, that test fails, forcing the addition
+to be a conscious, documented decision rather than an unnoticed side
+effect. The eventual method's real shape depends in part on
+`ExploitCandidate`'s still-provisional fields (item 53) -- Week 7 is
+where a concrete signature will actually be forced by real usage, the
+same way `ExploitCandidate`'s fields are expected to be forced there
+too.
+
+## 58. `RateLimitedClient` design decisions
+
+Three, on one file:
+
+**`OutOfScopeError` is its own class, not imported from
+`core.browser.browser_tool`.** `browser_tool.py` (Week 3) already
+defines a same-concept, near-identical-message exception. Reusing it
+would create a dependency from the HTTP layer onto the browser layer
+for a concept neither layer conceptually owns. Section 10.2 itself
+frames scope enforcement as FOUR INDEPENDENT layers; independent
+exception types (same naming convention, `"<Component> blocked:
+{url}"`, independent implementation) matches that stated independence
+better than centralizing the type would.
+
+**The 10 req/sec/host default is a constructor parameter, not read from
+`scope.yaml` -- a cited gap, not a silent omission.** Section 10.3 says
+the number is "configurable in scope.yaml," but unlike `race_parallel:
+30` (which has an exact, given key name), no section anywhere gives the
+rate limit's actual YAML key. `requests_per_second` defaults to `10.0`
+(Section 10.3's literal number); the scope.yaml-reading wire-up is left
+for whenever a real config-loading layer exists, matching the
+"framework now, wiring later" pattern already used for
+`token_throttler.py` (item 9).
+
+**Fixed-minimum-interval per host, not a token bucket -- a documented
+reading, not a citation.** Section 10.3 gives only the number, never an
+algorithm. A fixed interval between consecutive requests to the same
+host is the simplest limiter that satisfies "cannot be bypassed by LLM
+decisions" (a hard wait in code, not a policy to reason around) and is
+directly, deterministically testable via injectable clock/sleep
+functions without needing a burst-capacity concept the blueprint never
+mentions. Tested with a fake clock (`_FakeClock`), not real wall-clock
+delays.
+
+## 59. `InterceptingClient` design decisions
+
+Three, on one file:
+
+**`TrafficEntry` lives in `core/ontology/http.py` -- a new ontology
+file Section 3 doesn't name.** No field list for a traffic-log entry is
+given anywhere in Section 10.5 (only the caps and the suppression
+rule); placed in `core/ontology/` per the ontology-first rule anyway
+(a shared, multi-consumer shape belongs there, not buried in the one
+file that happens to construct it first -- the same reasoning
+`BrowserCapture`'s placement already used), despite Section 3's
+`ontology/` tree not naming this file. Fields kept minimal and directly
+traceable to Section 10.5's own vocabulary, not invented beyond it.
+
+**`TrafficLogStore` defaults OPEN (in-memory), unlike `CheckpointStore`/
+`ApprovalManagerProtocol`, which fail CLOSED (raise) -- a deliberate
+contrast, not an inconsistency.** Those two fail closed because a
+missing checkpoint or a missing approval gate is itself safety-relevant.
+Traffic logging is observability, not a safety gate: failing the
+underlying HTTP call (which a scanner needs the real response from, to
+detect anything at all) because Redis isn't configured in this
+environment would be a strictly worse failure mode than just not
+persisting the log durably. `InMemoryTrafficLogStore` is the default;
+the request always completes either way.
+
+**`[INTERCEPT_OVERFLOW]` logs once per crossing, not on every
+subsequent entry -- a documented reading.** Section 10.5 names the
+`WARN_THRESHOLD` (0.80) but not a logging cadence once past it. Logging
+once (a boolean latch, reset only by constructing a new
+`InterceptingClient`) surfaces the warning without spamming the log for
+the rest of a long session -- the more useful reading of "warn," though
+not itself a citation.
+
+## 60. CRITICAL: `chain_engine.py` tracked depth per CHAIN instead of per NODE -- found and fixed by this week's own test suite before commit
+
+An earlier version of `ChainExecutionEngine` (this week, before this
+entry) tracked one `_chain_depths[chain_id]` counter, incremented by 1
+on every `extend_chain` call regardless of which node the extension
+actually came from. This is wrong for any chain that branches: Section
+8.3's own error-handling cascade (`CHAIN_BROKEN -> Try alternate path in
+AttackGraph`) implies chains DO branch -- trying a different next step
+from an already-confirmed point is exactly what that cascade describes.
+Under the buggy version, two children of the SAME parent node (siblings,
+both one hop from that parent) incorrectly compounded the chain's depth
+as if they were increasingly deep, exhausting `MAX_DEPTH` (4) as fast as
+a genuinely deep, linear chain would -- an artificial limit with no
+grounding in the actual graph shape.
+
+Caught by this file's own test suite, not shipped silently: a test
+deliberately built a "wide" chain (nine children of the same root node,
+to isolate `MAX_NODES_PER_CHAIN` testing from `MAX_DEPTH`) and failed,
+because the buggy depth counter made the 5th sibling extension look
+like it had reached depth 4. Traced to the root cause (a whole-chain
+counter instead of per-node tracking) before writing any fix, per this
+week's kickoff amendment: verify before writing, don't guess at a patch.
+
+Fixed: `_node_depths` now keys by node identifier, not `chain_id`.
+`extend_chain` reads `from_node_id`'s own depth, checks the budget
+against THAT value, and only the new node receives `from_depth + 1`.
+`chain_depth(chain_id)` (the chain-level view other code will want) is
+now derived -- the maximum depth across every node currently tagged
+with that `chain_id` -- rather than a separately-tracked, and therefore
+separately-wrong, value. Verified against both shapes directly: a
+linear chain reaching exactly `MAX_DEPTH` behaves identically to before
+the fix (the two interpretations only diverge once a chain branches);
+a new, explicit test
+(`test_two_children_of_the_same_node_are_siblings_at_the_same_depth`)
+pins the previously-broken case directly, not just indirectly through
+the node-count test that happened to catch it.
+
+`chain_budget.py` itself needed no change -- `can_extend(current_depth,
+current_node_count)` is a pure function taking whatever numbers the
+caller passes; the bug was entirely in which number
+`ChainExecutionEngine` was passing, not in the budget-checking logic
+itself.
+
+## 61. `graph_partitioner.py`'s chunking strategy is a documented judgment call
+
+Section 3 gives only the number (200 nodes/subgraph), no algorithm.
+Implemented as: partition by weakly-connected component first (so two
+unrelated components under the cap are never merged into one output
+subgraph just because both would fit), then simple sequential slicing
+(sorted node order, for deterministic output across repeated calls) for
+any single component that still exceeds the cap on its own. In
+practice, a single `ChainExecutionEngine` chain never approaches 200
+nodes on its own (`MAX_NODES_PER_CHAIN` is 10) -- splitting only
+matters once multiple chains/components are combined into one graph
+for partitioning. Edges crossing between two output subgraphs are
+dropped -- an inherent consequence of splitting a graph into disjoint
+node sets, not a separate design choice requiring its own citation.
+
+## 62. Content-Type case-fold fix folded directly into `intercepting_client.py`, no separate doc round
+
+Per the advisor's instruction: the residual gap from item 52's revised
+proposal (`"application/x-www-form-urlencoded" in content_type` was
+case-sensitive; a real, RFC-valid request using different casing, e.g.
+`"Application/X-WWW-Form-Urlencoded"`, would fall through to the raw
+substring branch and miss a percent-encoded payload the form-aware
+branch should have caught) is fixed directly in the shipped code
+(`.lower()` on both the header value and the literal it's compared
+against), not documented as a separate future proposal. Verified with a
+dedicated test using exactly the advisor's own casing example, plus a
+second case combining mixed casing with a charset suffix.
+
+## 63. `core/chain/`'s other three named files -- `chain_executor.py`, `attack_graph_builder.py`, `chain_validator.py` -- not built this week, flagged explicitly
+
+Same treatment as `core/tools/`'s four files (item 55's approved
+scoping), not a silent gap: each is named exactly once in Section 3's
+tree listing (`chain_executor.py` line 472, `attack_graph_builder.py`
+line 473, `chain_validator.py` line 475) with zero accompanying spec --
+no field list, no method signature, no description beyond the bare
+filename -- and none is assigned to any week anywhere in Section 12
+(grep-confirmed, the same check already run for `core/tools/`'s four
+files and `base_scanner.py`).
+
+`attack_graph_builder.py` specifically has an additional, concrete
+blocker beyond "no spec": its own name identifies it as the file that
+would construct an `AttackGraph` -- the type Section 3 places in
+`surface.py` ("EndpointSignals, SurfaceData, AttackEdge, AttackGraph",
+line 254) and Section 8.1 names as Fast Lane's own reconnaissance
+output ("`ReconSubgraph -> FastLane: SurfaceData + AttackGraph`").
+`core/ontology/surface.py` does not exist in this repository (confirmed
+by direct directory search, same result as every prior check this
+project has run for it -- item 10, items 52-53's `ExploitCandidate`
+investigation). Building `attack_graph_builder.py` now would mean
+either inventing `AttackGraph`'s shape ahead of `surface.py` itself, or
+building against a type that doesn't exist yet -- neither is this
+week's call to make.
+
+This week's actual `core/chain/` scope (`chain_budget.py`,
+`chain_engine.py`, `graph_partitioner.py`) was deliberately the subset
+with real, citable numbers (Section 3's own comments: `max_depth=4,
+max_total=50, max_nodes=10`; `max 200 nodes/subgraph`) -- confirmed
+sufficient for `ChainExecutionEngine`'s own graph, which does not
+require `AttackGraph` to exist (Section 8.3's `CHAIN_BROKEN -> Try
+alternate path in AttackGraph` implies searching within a
+reconnaissance-derived graph is a distinct, later concern from managing
+a session's own in-progress confirmed chains, the thing this week's
+`ChainExecutionEngine` actually does). No week assignment or design
+input exists yet for the other three files; left for whenever
+`surface.py` and a real need force their shape, the same resolution
+criterion already applied to `core/tools/`.
+
+
 
 
