@@ -6,7 +6,7 @@ Also implements: Section 4.4's Playwright-layer paragraph, Section 9.1's
 ("browser_tool.py (all Playwright, R-H1 fix)").
 Blueprint: bb_agent_v6.6_final_blueprint.md
 
-WEEK 3 vs. WEEK 6 (docs/DECISIONS.md item 29): Section 12 lists this
+WEEK 3 vs. WEEK 6 (docs/DECISIONS.md item 28): Section 12 lists this
 component's scope check under BOTH the Week 3 row and the Week 6 row,
 verbatim, with no arbitration found anywhere else in the blueprint.
 Resolved by the project owner this week: Week 3 owns it, on the

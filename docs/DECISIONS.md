@@ -793,9 +793,21 @@ concurrent `capture()` calls against a deliberately slow endpoint take
 ≥0.5s wall-clock (serialized), not ~0.2s (parallel) — the semaphore is
 enforced, not just present in the constructor.
 
-**Not built this week (see item 30):** any code path that actually
+**Not built this week (see item 29):** any code path that actually
 calls `BrowserTool.capture()` — `MentalModelBuilder` itself remains
 blocked on `MentalModel`'s field list.
+
+**[CITATION FIX, this reply]:** this cross-reference originally read
+"see item 30" — wrong; item 30 is the unrelated `race_engine` Go-test-
+count reconciliation. Root cause: this log's numbering shifted once
+during this same work session — this item and item 29 swapped final
+positions relative to an earlier draft (confirmed independently: item
+29's own opening line reads "item 28 in the prior draft of this log,
+before this week's resolution," the same shift documented from the
+other side). This citation, and `core/browser/browser_tool.py` line 9's
+now-corrected "docs/DECISIONS.md item 29" (should have read item 28),
+were both written against the pre-shift numbering and never updated to
+track it. Both fixed together, this reply, for the same reason.
 
 ## 29. `MentalModel` — placement RESOLVED (ontology, not `core/mental_model/model.py`); field list PROPOSED then CONFIRMED and built
 
@@ -2164,6 +2176,444 @@ a session's own in-progress confirmed chains, the thing this week's
 input exists yet for the other three files; left for whenever
 `surface.py` and a real need force their shape, the same resolution
 criterion already applied to `core/tools/`.
+
+## 64. `hypothesis_tree.py` / `hypothesis_engine.py` — genuine, zero-spec gap; PROVISIONAL considered and rejected; flagged, not built
+
+**Grep-confirmed accounting, corrected from this week's pre-investigation
+report:** that report claimed "7 hits total" for `hypothesis` in the
+blueprint. Re-run: `grep -in "hypothesis" bb_agent_v6_6_final_blueprint.md`
+returns **9** line matches, not 7 — line 1846 (Section 11.2's BeliefGraph
+node-attribute dict) was missed. Corrected accounting, all 9:
+
+| Line | Content | Classification |
+|---|---|---|
+| 139 | `{hypothesis}: P={prob:.2f}...` (Section 2.5 Context Window template) | Display projection of a BeliefGraph node, not a spec for either file |
+| 292 | `helpers.py # Asset, Observation, Hypothesis, AttackStep` (Section 3 tree) | Says a `Hypothesis` *type* belongs in `ontology/helpers.py` (which does not exist yet) — a placement hint for a type, not a spec for `hypothesis_tree.py`/`hypothesis_engine.py` as files |
+| 332 | `hypothesis_engine.py` (Section 3 tree) | Bare filename, zero comment |
+| 333 | `hypothesis_tree.py` (Section 3 tree) | Bare filename, zero comment |
+| 1391 | `HYPOTHESIS_FALSE -> Generate alternative hypothesis` (Section 8.3 fallback cascade) | Names a trigger/behavior, no algorithm |
+| 1447 | `Hypothesis seeding: ~20` (Section 8.4 local-7B call budget) | Cost accounting only |
+| 1846 | `'hypothesis_id': str,` (Section 11.2 BeliefGraph node attributes) | **Already-built** `belief_manager.py` content, Week 4 — a node's identifier field, unrelated to these two planning-layer files |
+| 1931 | Week 6 row title: "...Hypothesis Tree" (Section 12) | Week assignment, zero content |
+| 1932 | Week 6 row body: "...hypothesis tree..." (Section 12) | Same, zero content |
+
+**9 hits, 1 is already-built BeliefGraph content, 8 cover these 2 files
+with zero spec.**
+
+Also confirmed: no call site anywhere in the built codebase
+(`grep -rn "hypothesis_tree\|hypothesis_engine\|HypothesisTree\|HypothesisEngine"
+--include="*.py"` across the full repo returns nothing), and no
+additional structural hint anywhere in the blueprint beyond the 8 rows
+above (checked Sections 6, 7, and 11 specifically — the sections that
+would describe tree/traversal behavior if any existed — plus a dedicated
+`hypothesis.*tree` pattern match).
+
+**The tension this gap raises, which is NOT the same shape as
+`core/tools/`'s or `core/chain/`'s precedent, and has to be resolved
+explicitly rather than pattern-matched:** `core/tools/`'s four files and
+`core/chain/`'s other three (item 63, itself following item 55's
+`core/tools/` precedent) were deferred because they have BOTH zero
+content spec AND zero week assignment anywhere in Section 12.
+`hypothesis_tree.py` differs on the second axis: it IS assigned a week —
+named directly in the Week 6 row title ("Browser + Sandbox + Hypothesis
+Tree", line 1931) and body (line 1932). Content-unspecified-but-week-
+assigned is exactly the gap shape item 32 calls "(B)-shaped" — and item
+32's own resolution for a (B)-shaped gap was a PROVISIONAL build
+(`BrowserCapture`), not a defer. Deferring this one identically to the
+`core/tools`/`core/chain` precedent, without addressing that difference,
+would be matching on the wrong axis (week-assignment) instead of the one
+item 32 actually turns on (whether a citable anchor exists to derive a
+provisional shape from).
+
+**Considered PROVISIONAL per item 32's precedent; rejected because,
+unlike `BrowserCapture`, there is no existing call site or field hint
+anywhere in the blueprint to derive a provisional shape from.**
+`BrowserCapture`'s provisional field list (`requested_url`, `final_url`,
+`html`, `status_code`) was grounded in its own call site —
+`browser_tool.py`'s `capture()` already specified, in prose, exactly
+what it returns (final URL post-redirect, rendered HTML, HTTP status) —
+so writing that dataclass was transcription of an existing citation, not
+invention. `hypothesis_tree.py`/`hypothesis_engine.py` have no
+equivalent: no caller anywhere references them (grep-confirmed above),
+no field is ever read from or written to a "hypothesis tree" object
+anywhere in the document, and none of Sections 6, 7, or 11 describe a
+tree/graph structure for hypotheses at all. A provisional field list or
+method signature here would be invented from nothing, which is exactly
+what the Engineering Constitution's STOP CONDITIONS forbid ("STOP. Do
+not invent a plausible default... Nothing gets silently inferred past
+you") — a materially different situation from item 32's, where the STOP
+CONDITIONS were satisfied by an actual citation before anything was
+written.
+
+**Resolution: flagged, not built.** Same bottom line as `core/tools/`'s
+four files and `core/chain/`'s three, but on a different, now-explicit
+basis: not "no week assignment" (this one has one), but "no content
+anchor of any kind, anywhere, despite the week assignment." Revisit
+if/when a future blueprint revision gives either file a field list, a
+method signature, or even a single consuming call site to transcribe
+from.
+
+**Not built this week:** `core/planning/hypothesis_tree.py`,
+`core/planning/hypothesis_engine.py`.
+
+## 65. `credential_validation_allowlist` — built: new ontology type, YAML loader, and `is_allowed()` exemption branch
+
+**Open question resolved by the project owner:** a real type, not a
+bare dict/tuple. Section 4.4's own pseudocode settles it independently
+of preference — `credential_validation_allowlist.enabled` and
+`credential_validation_allowlist.external_apis` are both attribute
+accesses, not `dict[...]`/`tuple[...]` indexing, so the blueprint's own
+author was already assuming a structured object at the point this
+exemption branch was written.
+
+**Built: `core/ontology/scope.py`** (new file — nothing existing fits
+thematically: `browser.py` owns Playwright-capture types, `enums.py`
+owns enums, `findings.py` owns the vulnerability/PoC domain, `http.py`
+owns HTTP-transport types, `mental_model.py` owns Phase-2 output;
+`scope.py` pairs with the two files that produce and consume this type,
+`scope_enforcer.py` and `configs/scope.yaml`). `CredentialValidationAllowlist(enabled: bool,
+external_apis: list[str])`, frozen, field names matching both Section
+4.4's attribute names and `configs/scope.yaml`'s own YAML keys verbatim.
+7 tests (`tests/core/ontology/test_scope.py`): field-holding, frozen,
+empty-`external_apis`-is-valid (not an error), field-name pin, an
+`asdict()`/reconstruct round trip (Constitution: every ontology
+dataclass change gets one), value equality.
+
+**Built: `load_credential_validation_allowlist(scope_yaml_path: Path)`
+in `core/governance/scope_config_generator.py`**, placed directly after
+`load_program_type` and mirroring its validation pattern exactly:
+missing file, malformed YAML, missing `credential_validation_allowlist`
+key, non-mapping block, missing/non-bool `enabled`, missing/non-list/
+non-string-entry `external_apis` — all raise `ScopeConfigError`,
+fail-closed, same as every other reader in this module. One deliberate
+difference from `load_scope_domains`: an empty `external_apis` list is
+accepted, not rejected — `scope_domains` being empty means nothing in
+the whole program is ever in scope (correctly fatal), but an empty
+credential-validation allowlist just means the exemption currently
+matches no host, a materially less consequential empty state. 14 tests,
+including a check against this repo's actual `configs/scope.yaml`
+confirming it loads `enabled: true` and exactly the five documented
+hosts (`sts.amazonaws.com`, `api.stripe.com`, `api.twilio.com`,
+`maps.googleapis.com`, `graph.microsoft.com`).
+
+**Built: the exemption branch itself, `core/governance/scope_enforcer.py`'s
+`is_allowed()`**, replacing the `del caller_id` placeholder with Section
+4.4's branch verbatim (`caller_id == "hardcoded_credentials" and
+credential_validation_allowlist.enabled and host in
+credential_validation_allowlist.external_apis`). Landed as a new
+keyword-only `credential_validation_allowlist:
+CredentialValidationAllowlist | None = None` parameter — **explicit
+parameter, not hidden module state**, the same treatment `scope_domains`
+already got at Week 3, applied consistently rather than starting a
+second convention for the same kind of thing (Engineering Constitution:
+"EXPLICIT PARAMETERS, NEVER RUNTIME INTROSPECTION"). This is one place
+this codebase deliberately diverges from Section 4.4's own pseudocode
+shape: the blueprint's snippet reads `scope_domains` and
+`credential_validation_allowlist` as pre-existing module/closure state;
+this codebase made `scope_domains` a parameter at Week 3, so
+`credential_validation_allowlist` follows that same, already-established
+pattern rather than the blueprint's literal snippet shape. The branch
+guards explicitly against a `None` allowlist
+(`credential_validation_allowlist is not None and ...`) before touching
+`.enabled` — the blueprint's pseudocode never needs this guard because
+it assumes the object always exists; a real parameter with a `None`
+default does not have that guarantee. Matching against `external_apis`
+is exact string containment (`host in external_apis`), deliberately NOT
+routed through `_is_scope_allowed`'s wildcard logic — Section 4.4's own
+code uses plain `in`, and `scope.yaml`'s comment block lists five fixed
+provider hostnames, not a domain-pattern space; a dedicated test
+(`test_matching_is_exact_not_wildcard_aware`) pins that a subdomain of
+an allowlisted host does NOT match. 7 new tests in
+`tests/core/governance/test_scope_enforcer.py`
+(`TestCredentialValidationAllowlistExemption`): all-three-conditions-met
+grants; wrong `caller_id` denies even with a valid allowlist; disabled
+allowlist denies even with correct caller and host; host not listed
+denies; exact-vs-wildcard matching; in-scope URL short-circuits before
+the exemption is even considered; `None` allowlist with a matching
+`caller_id` fails closed. One existing test
+(`test_caller_id_accepted_but_inert_this_week`) renamed to
+`test_caller_id_alone_without_an_allowlist_still_grants_nothing` and its
+docstring corrected — the assertion (`False`) is unchanged and still
+correct, but the *reason* changed: not "no allowlist mechanism exists
+yet" (one now does), but "this specific call doesn't provide one."
+
+**Confirmed, not just claimed: no existing call site needs to change.**
+`browser_tool.py`, `network_observer.py`, and `rate_limited_client.py`
+(grep-confirmed, the only three current callers of `is_allowed`) all
+call it without a `credential_validation_allowlist` argument, which
+defaults to `None`, under which the exemption branch cannot fire
+regardless of `caller_id` — identical behavior to before this change.
+None of the three needed editing, and none were edited.
+
+**Deliberately not wired further this week:** `RateLimitedClient` does
+not gain a `credential_validation_allowlist` constructor parameter, and
+nothing constructs one with `caller_id="hardcoded_credentials"` — the
+only component Section 4.4 permits to use this exemption,
+`hardcoded_credentials.py`, is Week 7 scope (Section 3's scanner-file
+listing) and does not exist yet (repo-wide grep confirms zero
+references). This week's job was making `is_allowed()` itself capable
+and fully tested, not wiring a consumer that isn't built yet — the same
+"framework now, wiring later" pattern already used for
+`token_throttler.py` (item 9).
+
+**Test count: 738 passed (710 + 28: 7 ontology + 14 loader + 7
+exemption, net zero from the one renamed test).** Go tests (32/32),
+`make ci-scope-diff`, and `make ci-scanner-http-check` re-run and
+confirmed unaffected — no Go code or `core/scanners/` touched this
+entry. `services/scope_allowed.json`'s regenerated-timestamp diff
+(a side effect of re-running `make ci-scope-diff` in this session) was
+reverted before commit — it is a generated artifact whose actual content
+(`allowed_patterns`) was unchanged; the timestamp/absolute-path diff was
+sandbox-session noise, not new work.
+
+## 66. `core/sandbox/` — Section 10.7 built in full: AST validator, outbound policy, orchestration harness, result assembly
+
+**Section 10.7, what it specifies:** an AST blocklist (immediate
+rejection, verbatim `BLOCKED` set), a pre-approved `call_target(url,
+method="GET", headers=None, body=None) -> {"status", "headers",
+"body_preview"}` injected into the executed namespace, and (Section 3's
+file-tree comment) a 30s timeout / 128 MB RAM ceiling. Four files named,
+one line of description each for three of them; `result_parser.py` gets
+none at all. All four built this week: `sandbox_validator.py`,
+`safety_guard.py`, `code_executor.py`, `result_parser.py`. Two new
+ontology types: `core/ontology/sandbox.py` (`SandboxOutcome`,
+`SandboxExecutionResult` -- Section 10.7 implies a result shape but
+never names one; placed in ontology per the Constitution's "every
+dataclass defined once" rule, new file since nothing existing owns this
+domain).
+
+### The `is_allowed_outbound` gap (discovered, not invented)
+
+Section 4.4 already writes this function in full, titled for the
+"Python HTTP layer (`scope_enforcer.py` + `intercepting_client.py`)":
+
+    METADATA_HOSTS = frozenset({'169.254.169.254', 'metadata.google.internal'})
+    def is_allowed_outbound(dst_host, dst_ip, scope_domains) -> bool:
+        return (dst_host.endswith('.interactsh.com') or dst_host in METADATA_HOSTS
+                or dst_ip == '169.254.169.254' or _is_scope_allowed(dst_host, scope_domains))
+
+Grep-confirmed before writing a line of `safety_guard.py`: this function
+was never implemented anywhere in this codebase, in any prior week.
+`core/http/intercepting_client.py` -- its named home -- references
+`scope_enforcer.py` in exactly one docstring sentence and calls nothing
+from it; `RateLimitedClient` (Week 5) enforces plain `_is_scope_allowed`
+only, with no interactsh/metadata exceptions at all. Section 3's own
+`safety_guard.py` comment ("Outbound block except interactsh + metadata
++ scope") is not a free-standing spec -- it names the same three-way
+policy `is_allowed_outbound` already defines, for a different call site
+(the sandbox's `call_target()` instead of the general HTTP layer).
+`safety_guard.py` is this function's first real implementation, scoped
+to that first real caller.
+
+**Why scoped locally to `core/sandbox/safety_guard.py`, not fixed at its
+originally-named home:** retrofitting `intercepting_client.py`/
+`RateLimitedClient` to also grant interactsh/metadata exceptions would
+change behavior for every EXISTING caller of those two files (Weeks 3
+and 5's scanners-to-be), not just the sandbox -- a change with real
+safety implications (a scanner's own HTTP calls should not silently
+gain an SSRF-adjacent exception it never asked for) that is not this
+week's decision to make unilaterally, and is explicitly out of this
+week's scope per this week's own kickoff ("Nothing in this kickoff
+authorizes... touching `core/scanners/`'s actual detection logic").
+`safety_guard.py` gives the SANDBOX the policy Section 4.4 already
+specifies, at the one call site that actually needs it this week,
+without changing what any other component is permitted to reach.
+Flagging the wider gap here for whoever picks up `intercepting_client.py`
+next, rather than silently working around it a second time later.
+
+**`dst_ip` is a real DNS resolution (`socket.gethostbyname`), not a
+string-list shortcut:** an earlier design considered simply appending
+`"*.interactsh.com"`/`"169.254.169.254"`/`"metadata.google.internal"` to
+`scope_domains` and letting `_is_scope_allowed`'s existing wildcard logic
+do all the work -- workable for the hostname-string cases, but silently
+drops Section 4.4's `dst_ip == METADATA_IP` branch (a hostname that
+DNS-resolves to the metadata IP without being named `169.254.169.254`
+or `metadata.google.internal` itself -- a DNS-rebinding-style SSRF
+against the metadata endpoint). Section 4.4's own signature already
+takes `dst_ip` as a parameter, so implementing that branch for real is
+transcription of what's specified, not new scope. Resolution failure
+fails that one branch open, not the whole check.
+
+### Hardening additions beyond Section 10.7's literal list (all in `sandbox_validator.py`, all documented at the point they're made, not silently added)
+
+1. **Whole-module block for `os`/`subprocess`**, not just the six named
+   dotted calls -- Section 10.7 names `os.system`/`os.popen`/`os.execv`/
+   `subprocess.call`/`subprocess.Popen`/`subprocess.run` but never says
+   `import os` alone is fine; this sandbox's stated purpose (PoC
+   verification scripts only) has no legitimate use for either module,
+   and allowing the bare import while blocking three of dozens of
+   members leaves every other escape hatch (`os.spawnv`, `os.fork`, ...)
+   and the `from os import system` bare-name evasion open.
+2. **Four filesystem-access modules Section 10.7 never mentions at
+   all**: `pathlib` (`Path(...).read_text()`/`.write_text()`/`.unlink()`
+   bypass the blocked `open()` builtin entirely -- not implemented in
+   terms of it), `shutil` (`rmtree`, file copy/move), `io` (`io.open` IS
+   the builtin `open`, reached by a different name), `tempfile` (creates
+   real files). All four reach exactly the category `open`'s own block
+   is visibly trying to close.
+3. **`sys`, blocked for a distinct, empirically-found reason**: verified
+   directly (not assumed) that a forked child already has `os` and
+   `subprocess` sitting in `sys.modules`, because `code_executor.py`
+   itself must `import multiprocessing`, which transitively imports
+   both for its own OS-level process management. `import sys;
+   sys.modules["os"].system(...)` writes neither "os" nor "subprocess"
+   next to an `import` keyword anywhere in the script, so the
+   whole-module block in (1) does nothing to stop it -- it never imports
+   either module, it just looks one up the harness already loaded.
+   Found by testing the actual assumption ("is os really in
+   sys.modules inside the child?") rather than trusting the
+   whole-module block to be sufficient on reasoning alone.
+4. **All dunder attribute access blocked** (`.__class__`, `.__bases__`,
+   `.__subclasses__`, `.__globals__`, `.__code__`, ...) -- not in
+   Section 10.7 at all. The standard mitigation (used by comparable
+   tools, e.g. RestrictedPython) against object-introspection sandbox
+   escapes that reach dangerous functionality without ever naming a
+   blocked identifier in source text (`().__class__.__bases__[0].
+   __subclasses__()` and similar). A PoC-verification script doing
+   string/JSON/regex work and calling `call_target()` has no legitimate
+   reason to reference a dunder attribute explicitly, so the expected
+   false-positive cost is at or near zero for this sandbox's actual,
+   narrow purpose.
+
+**What this file does NOT, and cannot, guarantee** (stated in its own
+module docstring, repeated here since it belongs on record, not just in
+a comment): pure AST/builtins blocklisting of a general-purpose language
+is a known-incomplete mitigation against a deliberately adversarial
+script -- Python's own introspection can, in principle, reach dangerous
+functionality through paths this file's specific hardening didn't
+anticipate. Section 13 chose subprocess + AST over Docker for this
+hardware's RAM budget; that decision is implemented here, not revisited.
+The 30s timeout, 128 MB ceiling, and network-egress restriction are the
+containment backstop for this residual risk, not a claim that the AST
+layer alone is airtight. Overclaiming a security boundary is itself a
+security bug.
+
+### Bug 1: `RateLimitedClient`/`is_allowed_outbound` composition bug (caught by end-to-end smoke testing, not unit tests)
+
+`check_outbound()` correctly approves a metadata-IP `call_target()` call
+(`is_allowed_outbound`'s own metadata exception). But the actual HTTP
+call is then made through a plain `RateLimitedClient`, which
+independently re-runs its OWN `scope_enforcer.is_allowed()` check --
+which has no interactsh/metadata exception at all (Section 10.2: each
+scope-enforcement layer enforces on its own call site;
+`RateLimitedClient` has no way to know a DIFFERENT layer's broader
+policy already cleared this call). Result: an approved metadata call was
+immediately re-rejected by the client making the actual request. Caught
+by running the real closure against a real (mocked-transport)
+`RateLimitedClient`, not by testing `check_outbound()` and
+`RateLimitedClient` in isolation, where each looks correct alone.
+
+**Fix:** `safety_guard._augmented_scope_domains()` -- `call_target()`'s
+`RateLimitedClient` is constructed with `scope_domains` plus
+`"*.interactsh.com"` and the two literal `METADATA_HOSTS` entries,
+expressed as ordinary `_is_scope_allowed` patterns. `check_outbound()`
+remains the real, authoritative decision (made first, with real DNS
+resolution); the augmented list only makes `RateLimitedClient`'s
+redundant internal re-check agree with a decision that was already made,
+not repeat it.
+
+### Bug 2: `__import__` strip-vs-guard (design-time, verified with four adversarial cases)
+
+First version of `build_restricted_globals` stripped `__import__` from
+the restricted builtins entirely, the same treatment as `eval`/`exec`/
+`compile`/`open`. Broke every ordinary `import` statement, including
+legitimate ones (`import json`): Python's compiler translates `import X`
+into an implicit call to `__builtins__.__import__(...)`, invisible in
+source text -- caught immediately by running a legitimate script through
+the real namespace, not assumed to be fine.
+
+Restoring the real `__import__` unmodified fixes that, but reopens a
+gap: `validate_code`'s import checks are static (`ast.Import`/
+`ast.ImportFrom` only) -- they cannot see a module name built or looked
+up at runtime, e.g. `globals()["__builtins__"]["__import__"]("os")`,
+which never writes "os" next to an `import` keyword anywhere
+`ast.parse` can see statically.
+
+**Fix:** `sandbox_validator._build_guarded_import()` -- a wrapper that
+delegates to the real `__import__` only for names outside
+`BLOCKED_MODULES`, installed as `__import__` in the restricted builtins
+(not removed). Verified with four cases, all now permanent tests in
+`test_sandbox_validator.py`'s `TestBuildRestrictedGlobalsRuntimeDefenseInDepth`:
+(A) ordinary `import json` still works; (B) the dynamic
+`globals()["__builtins__"]["__import__"]("os")` bypass is closed,
+raising `ImportError`; (C) the same dynamic-import mechanism still works
+for an allowed module (`json`), proving the fix is selective, not a
+second outright block; (D) `eval`/`exec`/`open`/`input` remain genuinely
+absent at runtime (`NameError`), confirming they did not need the same
+guard-not-strip treatment `__import__` did -- unlike `__import__`,
+nothing in the language implicitly depends on their presence.
+
+### Bug 3: `multiprocessing.Queue`'s lazy feeder-thread-spawn failing under the exact memory pressure it needs to report (found while building `code_executor.py`, not anticipated during `safety_guard.py`/`sandbox_validator.py` design)
+
+Original design (and the standalone smoke tests that proved out
+`RLIMIT_AS`/timeout/`asyncio.run()` individually) used
+`multiprocessing.Queue()` to send the child's result back to the parent.
+Once `code_executor.py` combined all the pieces -- including an actual
+`MemoryError` scenario -- a new failure appeared: `Queue.put()` lazily
+starts an internal feeder thread on its FIRST call, and starting a
+thread requires its own stack allocation. Under an already-exhausted
+`RLIMIT_AS` ceiling (the exact situation a `MemoryError` report needs to
+travel through), that allocation itself failed with `RuntimeError: can't
+start new thread` -- reproduced directly: both the primary
+`result_queue.put(payload)` and its own fallback `except` clause's
+`put(...)` failed identically, visible as a traceback on the child's
+stderr even though the test's own assertion still passed (the parent's
+"process ended, nothing was ever put on the queue" fallback path also
+resolves to `MEMORY_EXCEEDED`, by coincidence, not because the reporting
+path worked).
+
+**Fix:** switched to `multiprocessing.Pipe(duplex=False)`.
+`Connection.send()` performs a direct, synchronous write to the
+underlying OS pipe with no internal thread -- and is a better-fitted
+primitive regardless of the bug, since this file only ever needs one
+message from one producer to one consumer, never `Queue`'s
+multi-producer thread-safety machinery. Reverified empirically: the same
+`MemoryError` scenario that produced the `RuntimeError` traceback under
+`Queue` now completes with a clean stderr and the correct
+`MEMORY_EXCEEDED` classification, reported through the pipe rather than
+inferred from its absence.
+
+**Secondary correction this bug exposed:** `_drain_partial_stdout`'s
+original docstring claimed a terminated (`SIGTERM`) process
+"occasionally still manages to send a payload," framing partial-stdout
+recovery on timeout as the expected common case. A test written to
+confirm that (`print()` immediately before an infinite loop, then
+timeout) failed: `child_conn.send(payload)` is the LAST line of
+`_sandboxed_worker`'s own try/finally, and a script genuinely stuck in a
+tight loop is killed by `SIGTERM` (no handler installed, none added --
+see below) before it ever reaches that line. The docstring and the test
+were both corrected to state the actual, verified behavior: `TIMED_OUT`
+results have empty `stdout` in the normal case, not as a capture
+failure. Considered adding a `SIGTERM` handler inside the child to flush
+and report partial output before dying; rejected -- Waild's task list
+for this file did not ask for it, it adds signal-handling complexity to
+the highest-stakes file in the project for a diagnostic nice-to-have,
+and "simpler over cleverer" was judged the right call for code at this
+security boundary specifically, not a generic preference.
+
+### Test count, file by file (session-start baseline 710, independently reconciled -- this replaces "728," an arithmetic error caught and corrected before this entry was written)
+
+| File | New tests | Note |
+|---|---|---|
+| `tests/core/ontology/test_scope.py` | 7 | new file |
+| `tests/core/governance/test_scope_config_generator.py` | +14 | modified, 19 -> 33 |
+| `tests/core/governance/test_scope_enforcer.py` | +7 | modified, 17 -> 24 (net; one test renamed, not added/removed) |
+| `tests/core/sandbox/test_safety_guard.py` | 25 | new file |
+| `tests/core/sandbox/test_sandbox_validator.py` | 71 | new file |
+| `tests/core/sandbox/test_result_parser.py` | 17 | new file |
+| `tests/core/sandbox/test_code_executor.py` | 19 | new file (real subprocess integration tests) |
+| **Total delta** | **160** | 7+14+7+25+71+17+19 |
+
+**710 + 160 = 870**, confirmed by an actual full `python3 -m pytest -q`
+run (no path filter), not computed and assumed: `870 passed`. Go tests
+re-run and unaffected (32/32 -- no Go code touched this entry), both CI
+checks (`ci-scope-diff`, `ci-scanner-http-check`) re-run clean -- no Go
+code or `core/scanners/` touched this entry either.
+
+**Files this entry covers:** `core/ontology/sandbox.py` (new),
+`core/sandbox/safety_guard.py` (new), `core/sandbox/sandbox_validator.py`
+(new), `core/sandbox/code_executor.py` (new), `core/sandbox/result_parser.py`
+(new), plus the four test files listed above.
 
 
 

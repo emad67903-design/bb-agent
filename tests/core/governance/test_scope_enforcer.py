@@ -12,6 +12,7 @@ from core.governance.scope_enforcer import (
     is_allowed,
     load_scope_domains_for_enforcement,
 )
+from core.ontology.scope import CredentialValidationAllowlist
 
 
 @pytest.fixture
@@ -75,12 +76,16 @@ class TestIsAllowed:
         vector on attacker-influenced input."""
         assert is_allowed("not a url at all", ["example.com"]) is False
 
-    def test_caller_id_accepted_but_inert_this_week(self):
-        """Week 6 scope (docs/DECISIONS.md item 31): passing any
-        caller_id, including the eventual 'hardcoded_credentials'
-        value, must not grant access this week -- there is no
-        allowlist to check against yet, and this function must not
-        silently invent one."""
+    def test_caller_id_alone_without_an_allowlist_still_grants_nothing(self):
+        """Week 6 (docs/DECISIONS.md item 65) update: the allowlist
+        mechanism now exists, but this call doesn't provide one --
+        `credential_validation_allowlist` defaults to `None`, and the
+        exemption branch must fail closed on that, not raise and not
+        silently assume some allowlist. This is exactly what every Week
+        3/5 caller (browser_tool.py, network_observer.py,
+        rate_limited_client.py) still does today -- none of them pass
+        this parameter, so the exemption can never fire through any of
+        them."""
         assert (
             is_allowed(
                 "https://sts.amazonaws.com/",
@@ -92,6 +97,121 @@ class TestIsAllowed:
 
     def test_caller_id_defaults_to_none(self):
         assert is_allowed("https://example.com/", ["example.com"]) is True
+
+
+class TestCredentialValidationAllowlistExemption:
+    """Week 6 (docs/DECISIONS.md item 65): Section 4.4's exemption
+    branch, verbatim -- `caller_id == "hardcoded_credentials"` AND
+    `credential_validation_allowlist.enabled` AND `host in
+    credential_validation_allowlist.external_apis`."""
+
+    @pytest.fixture
+    def allowlist(self):
+        return CredentialValidationAllowlist(
+            enabled=True,
+            external_apis=["sts.amazonaws.com", "api.stripe.com"],
+        )
+
+    def test_all_three_conditions_met_grants_access(self, allowlist):
+        assert (
+            is_allowed(
+                "https://sts.amazonaws.com/latest/api/token",
+                ["*.example.com"],
+                caller_id="hardcoded_credentials",
+                credential_validation_allowlist=allowlist,
+            )
+            is True
+        )
+
+    def test_wrong_caller_id_denies_even_with_valid_allowlist(self, allowlist):
+        """The exemption is scanner-specific -- Section 4.4 permits it
+        for hardcoded_credentials.py only. Any other caller_id,
+        including a plausible-looking scanner name, must not reach an
+        otherwise-matching allowlist."""
+        assert (
+            is_allowed(
+                "https://sts.amazonaws.com/",
+                ["*.example.com"],
+                caller_id="ssrf_scanner",
+                credential_validation_allowlist=allowlist,
+            )
+            is False
+        )
+
+    def test_disabled_allowlist_denies_even_with_correct_caller_and_host(self):
+        """scope.yaml's own comment: 'set false -> skip external
+        validation; mark TIER_D for human'. enabled is a hard kill
+        switch, independent of what's in external_apis."""
+        disabled = CredentialValidationAllowlist(
+            enabled=False,
+            external_apis=["sts.amazonaws.com"],
+        )
+        assert (
+            is_allowed(
+                "https://sts.amazonaws.com/",
+                ["*.example.com"],
+                caller_id="hardcoded_credentials",
+                credential_validation_allowlist=disabled,
+            )
+            is False
+        )
+
+    def test_host_not_in_external_apis_denies(self, allowlist):
+        assert (
+            is_allowed(
+                "https://not-on-the-list.com/",
+                ["*.example.com"],
+                caller_id="hardcoded_credentials",
+                credential_validation_allowlist=allowlist,
+            )
+            is False
+        )
+
+    def test_matching_is_exact_not_wildcard_aware(self, allowlist):
+        """Deliberately different from _is_scope_allowed's wildcard
+        matching (Section 4.4's `host in external_apis` is a plain
+        containment check against a literal list, not a *.-aware scan)
+        -- a subdomain of an allowlisted host must NOT match."""
+        assert (
+            is_allowed(
+                "https://evil.sts.amazonaws.com/",
+                ["*.example.com"],
+                caller_id="hardcoded_credentials",
+                credential_validation_allowlist=allowlist,
+            )
+            is False
+        )
+
+    def test_in_scope_url_short_circuits_before_the_exemption_is_even_considered(self, allowlist):
+        """The exemption is a fallback, not a precondition -- an
+        in-scope URL is allowed on the ordinary scope check regardless
+        of caller_id or allowlist contents."""
+        assert (
+            is_allowed(
+                "https://api.example.com/",
+                ["*.example.com"],
+                caller_id="some_other_caller",
+                credential_validation_allowlist=CredentialValidationAllowlist(
+                    enabled=False, external_apis=[]
+                ),
+            )
+            is True
+        )
+
+    def test_none_allowlist_with_matching_caller_id_fails_closed(self):
+        """Redundant with TestIsAllowed's own coverage of this exact
+        case, kept here too since it is this test class's core
+        boundary: caller_id alone, without an allowlist object, must
+        never be sufficient."""
+        assert (
+            is_allowed(
+                "https://sts.amazonaws.com/",
+                ["*.example.com"],
+                caller_id="hardcoded_credentials",
+                credential_validation_allowlist=None,
+            )
+            is False
+        )
 
 
 class TestLoadScopeDomainsForEnforcement:

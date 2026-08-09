@@ -38,28 +38,57 @@ Built here (this file), Week 3: `_is_scope_allowed` and `is_allowed`,
 exactly as Section 4.4 specifies them, including the explicit `caller_id`
 parameter (v6.5/V6.4-M2 fix) rather than call-stack inspection.
 
-Deliberately NOT built here (still gaps, not silently resolved):
+Built here (this file), Week 6 (docs/DECISIONS.md item 65): the
+`credential_validation_allowlist` exemption branch inside `is_allowed`
+-- Section 4.4's `if (caller_id == "hardcoded_credentials" and
+credential_validation_allowlist.enabled and host in
+credential_validation_allowlist.external_apis)` branch, verbatim -- per
+Section 12's Week 6 row ("... `credential_validation_allowlist` in
+`scope_enforcer.py`"). Landed as a new keyword-only
+`credential_validation_allowlist: CredentialValidationAllowlist | None
+= None` parameter -- the same treatment as `scope_domains` (Week 3): an
+explicit parameter, never hidden module state or call-stack inspection,
+per the Engineering Constitution's "EXPLICIT PARAMETERS, NEVER RUNTIME
+INTROSPECTION" rule, applied consistently to both rather than inventing
+a second convention for the same kind of thing. Defaults to `None` so
+no Week 3/5 caller (`browser_tool.py`, `network_observer.py`,
+`rate_limited_client.py`) needs to change -- confirmed: none of them
+pass a non-`None` `caller_id` either, so the exemption branch cannot
+fire through any of them regardless of this change. The branch guards
+explicitly against a `None` allowlist (`credential_validation_allowlist
+is not None and ...`) rather than assuming, as Section 4.4's own
+pseudocode does, that the object is always available -- the blueprint's
+snippet lives in a world where both `scope_domains` and
+`credential_validation_allowlist` are pre-existing module/closure
+state; this codebase made `scope_domains` explicit at Week 3, so
+`credential_validation_allowlist` follows that same, now-established
+pattern.
+
+Still deliberately NOT built here (still gaps, not silently resolved):
   - `is_allowed_outbound` / `METADATA_HOSTS` / the `.interactsh.com` and
     169.254.169.254 exceptions (Section 4.4). These back the *Python
     HTTP layer* (`intercepting_client.py`), not Playwright -- Section
     4.4 titles that code block "Python HTTP layer
     (scope_enforcer.py + intercepting_client.py)" specifically, and
-    `intercepting_client.py` has an explicit Week 5 assignment (Section
-    12). `browser_tool.py`'s own scope-check skeleton (Section 3) calls
-    only `is_allowed(url)` -- never `is_allowed_outbound` -- so nothing
-    Week-3-scoped needs it.
-  - The `credential_validation_allowlist` exemption branch inside
-    `is_allowed` (Section 4.4's `if (caller_id == "hardcoded_credentials"
-    ...)` branch). Explicitly Week 6 (Section 12's Week 6 row: "...
-    `credential_validation_allowlist` in `scope_enforcer.py`"). The
-    `caller_id` parameter is accepted now (so Week 6 can add that branch
-    without changing this function's signature or any Week-3 caller),
-    but it does nothing yet -- there is no allowlist to check against
-    until Week 6 builds it.
-  - Wiring into `RateLimitedClient` (Week 5), Go `scope_guard.go` (Week
-    0, already independent per Section 10.2 item 4), or `call_target()`
-    sandbox (Week 6). This file exists to be called; Week 3 only adds
-    one caller (`browser_tool.py`).
+    `intercepting_client.py`'s own Week 5 implementation does not import
+    or reference this module at all (grep-confirmed: one docstring
+    mention, zero calls). `browser_tool.py`'s own scope-check skeleton
+    (Section 3) calls only `is_allowed(url)` -- never
+    `is_allowed_outbound` -- so nothing built so far needs it.
+  - Wiring `credential_validation_allowlist` into `RateLimitedClient`
+    (Week 5) or `call_target()` (sandbox, this week). `is_allowed()`
+    itself now supports the exemption end-to-end, but no caller
+    constructs a `RateLimitedClient` with
+    `caller_id="hardcoded_credentials"` yet -- `hardcoded_credentials.py`
+    (the only component Section 4.4 permits to use this exemption) is
+    Week 7 scope (Section 3's scanner-file listing), not built yet
+    (repo-wide grep confirms zero references). Same "framework now,
+    wiring later" pattern already used for `token_throttler.py`
+    (docs/DECISIONS.md item 9). Go `scope_guard.go` (Week 0, already
+    independent per Section 10.2 item 4) never carries this exemption at
+    all -- Section 4.4 scopes `credential_validation_allowlist` to
+    `hardcoded_credentials.py`'s Python-side HTTP calls only, not the Go
+    race/smuggling services.
 
 Reuses `core.governance.scope_config_generator.load_scope_domains` for
 reading `configs/scope.yaml`'s `scope_domains` list rather than adding a
@@ -76,6 +105,7 @@ import urllib.parse
 from pathlib import Path
 
 from core.governance.scope_config_generator import load_scope_domains
+from core.ontology.scope import CredentialValidationAllowlist
 
 
 def _is_scope_allowed(dst_host: str | None, scope_domains: list[str]) -> bool:
@@ -116,6 +146,7 @@ def is_allowed(
     scope_domains: list[str],
     *,
     caller_id: str | None = None,
+    credential_validation_allowlist: CredentialValidationAllowlist | None = None,
 ) -> bool:
     """Hard-gate scope check: is `url`'s host in scope?
 
@@ -123,9 +154,10 @@ def is_allowed(
     explicit `caller_id` string, set once at the caller's own
     construction time and carried on its instance -- never via call-stack
     inspection, which the blueprint documents as costing 50-200ms per
-    call at Fast Lane volume. `browser_tool.py` is this week's only
-    caller; per Section 10.2 item 2, it must call this before every
-    `page.goto()`.
+    call at Fast Lane volume. `browser_tool.py`, `network_observer.py`,
+    and `rate_limited_client.py` are this codebase's callers so far; per
+    Section 10.2 items 1-2, each must call this before making its
+    respective request.
 
     Args:
         url: The full URL a caller wants to reach.
@@ -135,20 +167,42 @@ def is_allowed(
             call -- re-parsing YAML on every scope check would reproduce
             the exact per-call-cost problem `caller_id` itself was
             introduced to avoid (Section 4.4).
-        caller_id: Identifies the calling component. Reserved for Week
-            6's `credential_validation_allowlist` exemption
-            (`caller_id == "hardcoded_credentials"`); accepted now for
-            signature stability but not yet acted on -- see this
-            module's docstring.
+        caller_id: Identifies the calling component. Only meaningful
+            value today: `"hardcoded_credentials"`, which combined with
+            `credential_validation_allowlist` unlocks the Week 6
+            exemption below. Any other value (including `None`) behaves
+            identically to `None` -- it simply cannot match the
+            exemption's `caller_id ==` check.
+        credential_validation_allowlist: The Week 6 (docs/DECISIONS.md
+            item 65) `credential_validation_allowlist` exemption data,
+            normally loaded once via
+            `core.governance.scope_config_generator.load_credential_validation_allowlist`
+            and carried by the caller, mirroring how `scope_domains`
+            itself is loaded once and carried. `None` (the default)
+            means "this caller never offers the exemption" -- not an
+            error; every caller except a future `hardcoded_credentials.py`
+            is expected to leave this `None` permanently.
 
     Returns:
-        `True` if `url`'s host is in scope, else `False`. Never raises
+        `True` if `url`'s host is in scope, OR if the
+        `credential_validation_allowlist` exemption applies (`caller_id
+        == "hardcoded_credentials"` AND the allowlist is provided,
+        enabled, and lists `url`'s host) -- else `False`. Never raises
         on a malformed `url`; an unparseable host is simply out of
-        scope (fails closed).
+        scope (fails closed), and a malformed/missing allowlist simply
+        fails the exemption rather than raising (also fails closed).
     """
-    del caller_id  # Week 6 will consume this; unused until that allowlist exists.
     host = urllib.parse.urlparse(url).hostname
-    return _is_scope_allowed(host, scope_domains)
+    if _is_scope_allowed(host, scope_domains):
+        return True
+    if (
+        caller_id == "hardcoded_credentials"
+        and credential_validation_allowlist is not None
+        and credential_validation_allowlist.enabled
+        and host in credential_validation_allowlist.external_apis
+    ):
+        return True
+    return False
 
 
 def load_scope_domains_for_enforcement(scope_yaml_path: Path) -> list[str]:

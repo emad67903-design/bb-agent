@@ -9,6 +9,14 @@ here rather than as a third parallel YAML parser elsewhere, so this
 module stays the single place that knows how to read configs/scope.yaml.
 Consumed by core/governance/safety_gate.py's VDP tier-cap enforcement
 (Section 10.1, R-L5 fix).
+
+Also implements (Week 6 addition, docs/DECISIONS.md item 65): Section
+3's scope.yaml comment block's `credential_validation_allowlist` block
+(R-H4 fix) -- `load_credential_validation_allowlist` below is a third
+reader over the same file, same reasoning as `load_program_type`'s own
+addition note above: one place that knows how to read configs/scope.yaml,
+not a third parallel parser. Consumed by
+core/governance/scope_enforcer.py's `is_allowed()` exemption branch.
 Blueprint: bb_agent_v6.6_final_blueprint.md
 
 Reads configs/scope.yaml's `scope_domains` list and writes
@@ -27,6 +35,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from core.ontology.scope import CredentialValidationAllowlist
 
 _VALID_PROGRAM_TYPES = frozenset({"bug_bounty", "vdp"})
 
@@ -132,6 +142,71 @@ def load_program_type(scope_yaml_path: Path) -> str:
             f"scope.yaml 'program_type' must be one of {sorted(_VALID_PROGRAM_TYPES)}, got {program_type!r}"
         )
     return program_type
+
+
+def load_credential_validation_allowlist(scope_yaml_path: Path) -> CredentialValidationAllowlist:
+    """Loads and validates the `credential_validation_allowlist` block
+    from scope.yaml.
+
+    Section 3's scope.yaml comment block (R-H4 fix): the
+    `hardcoded_credentials.py`-only exemption letting
+    `core.governance.scope_enforcer.is_allowed()` permit read-only GET
+    calls to external credential-validation APIs outside `scope_domains`.
+
+    Args:
+        scope_yaml_path: Path to configs/scope.yaml.
+
+    Returns:
+        A CredentialValidationAllowlist built from the block's `enabled`
+        and `external_apis` values.
+
+    Raises:
+        ScopeConfigError: If the file is missing, is not valid YAML, has
+            no `credential_validation_allowlist` key, the block is not a
+            mapping, `enabled` is missing or not a boolean, or
+            `external_apis` is missing, not a list, or contains a
+            non-string / empty-string entry -- fail-closed, mirroring
+            `load_program_type`'s validation strictness. An empty
+            `external_apis` list (with `enabled: true`) is valid: it
+            means the exemption is switched on but currently matches no
+            host, not a config error.
+    """
+    if not scope_yaml_path.is_file():
+        raise ScopeConfigError(f"scope.yaml not found at {scope_yaml_path}")
+
+    try:
+        raw: Any = yaml.safe_load(scope_yaml_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ScopeConfigError(f"scope.yaml is not valid YAML: {exc}") from exc
+
+    if not isinstance(raw, dict) or "credential_validation_allowlist" not in raw:
+        raise ScopeConfigError(
+            f"scope.yaml at {scope_yaml_path} has no 'credential_validation_allowlist' key"
+        )
+
+    block = raw["credential_validation_allowlist"]
+    if not isinstance(block, dict):
+        raise ScopeConfigError("scope.yaml 'credential_validation_allowlist' must be a mapping")
+
+    if "enabled" not in block:
+        raise ScopeConfigError("scope.yaml 'credential_validation_allowlist.enabled' key is missing")
+    enabled = block["enabled"]
+    if not isinstance(enabled, bool):
+        raise ScopeConfigError("scope.yaml 'credential_validation_allowlist.enabled' must be a boolean")
+
+    if "external_apis" not in block:
+        raise ScopeConfigError(
+            "scope.yaml 'credential_validation_allowlist.external_apis' key is missing"
+        )
+    external_apis = block["external_apis"]
+    if not isinstance(external_apis, list) or not all(
+        isinstance(a, str) and a.strip() for a in external_apis
+    ):
+        raise ScopeConfigError(
+            "scope.yaml 'credential_validation_allowlist.external_apis' must be a list of non-empty strings"
+        )
+
+    return CredentialValidationAllowlist(enabled=enabled, external_apis=list(external_apis))
 
 
 def generate_scope_allowed_json(scope_yaml_path: Path, output_path: Path) -> ScopeGenerationResult:

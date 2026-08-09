@@ -11,9 +11,11 @@ import yaml
 from core.governance.scope_config_generator import (
     ScopeConfigError,
     generate_scope_allowed_json,
+    load_credential_validation_allowlist,
     load_program_type,
     load_scope_domains,
 )
+from core.ontology.scope import CredentialValidationAllowlist
 
 
 @pytest.fixture
@@ -101,6 +103,148 @@ class TestLoadProgramType:
         path.write_text("program_type: [unclosed", encoding="utf-8")
         with pytest.raises(ScopeConfigError, match="not valid YAML"):
             load_program_type(path)
+
+
+class TestLoadCredentialValidationAllowlist:
+    """Week 6 (docs/DECISIONS.md item 65): Section 3's scope.yaml
+    comment block (R-H4 fix) -- consumed by
+    core/governance/scope_enforcer.py's is_allowed() exemption branch."""
+
+    def test_loads_enabled_and_external_apis(self, scope_yaml):
+        path = scope_yaml(
+            {
+                "scope_domains": ["a.com"],
+                "credential_validation_allowlist": {
+                    "enabled": True,
+                    "external_apis": ["sts.amazonaws.com", "api.stripe.com"],
+                },
+            }
+        )
+        result = load_credential_validation_allowlist(path)
+        assert result == CredentialValidationAllowlist(
+            enabled=True,
+            external_apis=["sts.amazonaws.com", "api.stripe.com"],
+        )
+
+    def test_loads_disabled(self, scope_yaml):
+        path = scope_yaml(
+            {
+                "scope_domains": ["a.com"],
+                "credential_validation_allowlist": {"enabled": False, "external_apis": []},
+            }
+        )
+        result = load_credential_validation_allowlist(path)
+        assert result.enabled is False
+
+    def test_empty_external_apis_is_valid(self, scope_yaml):
+        """enabled: true with nothing listed is a legal config state,
+        not an error -- see core/ontology/scope.py's own test for the
+        same point at the dataclass level."""
+        path = scope_yaml(
+            {
+                "scope_domains": ["a.com"],
+                "credential_validation_allowlist": {"enabled": True, "external_apis": []},
+            }
+        )
+        result = load_credential_validation_allowlist(path)
+        assert result.external_apis == []
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(ScopeConfigError, match="not found"):
+            load_credential_validation_allowlist(tmp_path / "does_not_exist.yaml")
+
+    def test_missing_credential_validation_allowlist_key_raises(self, scope_yaml):
+        path = scope_yaml({"scope_domains": ["a.com"]})
+        with pytest.raises(ScopeConfigError, match="credential_validation_allowlist"):
+            load_credential_validation_allowlist(path)
+
+    def test_block_not_a_mapping_raises(self, scope_yaml):
+        path = scope_yaml({"scope_domains": ["a.com"], "credential_validation_allowlist": "not-a-mapping"})
+        with pytest.raises(ScopeConfigError, match="mapping"):
+            load_credential_validation_allowlist(path)
+
+    def test_missing_enabled_key_raises(self, scope_yaml):
+        path = scope_yaml(
+            {
+                "scope_domains": ["a.com"],
+                "credential_validation_allowlist": {"external_apis": ["a.com"]},
+            }
+        )
+        with pytest.raises(ScopeConfigError, match="enabled"):
+            load_credential_validation_allowlist(path)
+
+    def test_non_bool_enabled_raises(self, scope_yaml):
+        path = scope_yaml(
+            {
+                "scope_domains": ["a.com"],
+                "credential_validation_allowlist": {"enabled": "yes", "external_apis": ["a.com"]},
+            }
+        )
+        with pytest.raises(ScopeConfigError, match="boolean"):
+            load_credential_validation_allowlist(path)
+
+    def test_missing_external_apis_key_raises(self, scope_yaml):
+        path = scope_yaml(
+            {
+                "scope_domains": ["a.com"],
+                "credential_validation_allowlist": {"enabled": True},
+            }
+        )
+        with pytest.raises(ScopeConfigError, match="external_apis"):
+            load_credential_validation_allowlist(path)
+
+    def test_non_list_external_apis_raises(self, scope_yaml):
+        path = scope_yaml(
+            {
+                "scope_domains": ["a.com"],
+                "credential_validation_allowlist": {"enabled": True, "external_apis": "sts.amazonaws.com"},
+            }
+        )
+        with pytest.raises(ScopeConfigError, match="external_apis"):
+            load_credential_validation_allowlist(path)
+
+    def test_non_string_entry_in_external_apis_raises(self, scope_yaml):
+        path = scope_yaml(
+            {
+                "scope_domains": ["a.com"],
+                "credential_validation_allowlist": {"enabled": True, "external_apis": ["a.com", 123]},
+            }
+        )
+        with pytest.raises(ScopeConfigError, match="external_apis"):
+            load_credential_validation_allowlist(path)
+
+    def test_empty_string_entry_in_external_apis_raises(self, scope_yaml):
+        path = scope_yaml(
+            {
+                "scope_domains": ["a.com"],
+                "credential_validation_allowlist": {"enabled": True, "external_apis": ["a.com", "  "]},
+            }
+        )
+        with pytest.raises(ScopeConfigError, match="external_apis"):
+            load_credential_validation_allowlist(path)
+
+    def test_malformed_yaml_raises(self, tmp_path):
+        path = tmp_path / "scope.yaml"
+        path.write_text("credential_validation_allowlist: [unclosed", encoding="utf-8")
+        with pytest.raises(ScopeConfigError, match="not valid YAML"):
+            load_credential_validation_allowlist(path)
+
+    def test_real_scope_yaml_loads_the_five_documented_providers(self):
+        """Sanity check against this repo's actual configs/scope.yaml,
+        not just synthetic fixtures -- Section 3's comment block names
+        exactly these five hosts."""
+        from pathlib import Path
+
+        real_path = Path(__file__).parent.parent.parent.parent / "configs" / "scope.yaml"
+        result = load_credential_validation_allowlist(real_path)
+        assert result.enabled is True
+        assert result.external_apis == [
+            "sts.amazonaws.com",
+            "api.stripe.com",
+            "api.twilio.com",
+            "maps.googleapis.com",
+            "graph.microsoft.com",
+        ]
 
 
 class TestGenerateScopeAllowedJson:
