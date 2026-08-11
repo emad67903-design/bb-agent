@@ -1,10 +1,21 @@
 """
-Implements: local, minimal prompt-injection mitigation for the six
-core/mental_model/ Groq/local-7B-calling files ONLY -- role_mapper.py
-(via flow_tracer.py's shared call), flow_tracer.py,
+Implements: local, minimal prompt-injection mitigation for seven
+files ONLY -- the six core/mental_model/ Groq/local-7B-calling files:
+role_mapper.py (via flow_tracer.py's shared call), flow_tracer.py,
 boundary_identifier.py, assumption_extractor.py,
-exploitability_scorer.py, builder.py.
+exploitability_scorer.py, builder.py; plus, as a named, explicit,
+ratified exception (docs/DECISIONS.md item 64's Section 39
+architectural review), core/planning/hypothesis_engine.py.
 Blueprint: bb_agent_v6.6_final_blueprint.md
+
+SEVENTH CALLER, RATIFIED: hypothesis_engine.py's `seed_hypothesis` uses
+only `detect_injection_markers` (not `truncate_and_delimit`, which has
+no call site there -- see that module's own docstring) to flag
+suspicious phrasing in candidate `vuln_type`/`endpoint` strings, which
+may ultimately derive from MentalModel/target-controlled content.
+Detection-only, logged not blocked, same as every other caller below --
+this exception does not change this module's behavior, only its
+documented caller list.
 
 NOT `core/governance/content_sanitizer.py` -- deliberately (see
 docs/DECISIONS.md item 41 for the full record). Section 3 names
@@ -15,17 +26,18 @@ general, project-wide component now -- from a single call site's
 concrete needs -- would mean guessing its real shape from one example,
 the same failure mode `TargetAdapter`'s original per-`TargetType`
 weight table would have been (items 34/35). This module is scoped
-narrowly on purpose: it exists only because these six files, uniquely
-among everything built so far, feed attacker-reachable content (raw
-page HTML in `flow_tracer.py`'s case; page-derived evidence strings
-everywhere downstream) into LLM prompts. `content_sanitizer.py` itself
-remains unspecified and unassigned, to be designed once 2+ real
-LLM-calling components exist to generalize a real interface from,
-rather than invented in the abstract now.
+narrowly on purpose: it exists only because these files feed
+attacker-reachable content (raw page HTML in `flow_tracer.py`'s case;
+page-derived evidence strings everywhere downstream, including
+hypothesis candidates derived from them) into LLM prompts or, for
+hypothesis_engine.py specifically, into content that may later reach
+one. `content_sanitizer.py` itself remains unspecified and unassigned,
+to be designed once enough real callers exist to generalize a real
+interface from, rather than invented in the abstract now.
 
 PRIVATE HELPER (leading underscore), same convention as
 `_groq_client.py`: introduces no new public path Section 3 names,
-imported only by the six files above.
+imported only by the seven files above.
 
 DETECTION, NOT SANITIZATION: `detect_injection_markers` flags
 suspicious phrasing: it does not strip, rewrite, or block anything.

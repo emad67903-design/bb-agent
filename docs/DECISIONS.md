@@ -2615,6 +2615,164 @@ code or `core/scanners/` touched this entry either.
 (new), `core/sandbox/code_executor.py` (new), `core/sandbox/result_parser.py`
 (new), plus the four test files listed above.
 
+## 67. Hypothesis identity granularity: coarse (`vuln_type`, `endpoint`) — supersedes this review's own initial `DEDUP_KEY`-derived proposal
 
+**New architectural decision, not a directly-stated blueprint
+requirement** — stated that way deliberately, not as "the Blueprint
+requires coarse identity." Blueprint evidence supports coarse identity;
+it is adopted here as the current decision, not asserted as a rule the
+blueprint itself states.
 
+**Evidence — strong, consistent architectural inference, not an
+explicit rule, re-verified directly against the blueprint file before
+this entry was written:** Section 11.1's own capacity arithmetic,
+`"max_nodes": 15_000, # ~500 endpoints × 29 vuln types + padding` (line
+1834), carries no method/parameter multiplier anywhere. Section 11.2's
+node schema is exactly nine keys — `hypothesis_id`, `vuln_type`,
+`endpoint`, `alpha`, `beta`, `exploitability_score`, `business_value`,
+`pinned_until`, `last_updated` — no `http_method`, no `parameter`
+field. Two independent parts of the blueprint, mutually consistent,
+both silent on method/parameter at the hypothesis-identity level
+specifically.
+
+**Rejected: deriving `hypothesis_id` from Section 6.9's `DEDUP_KEY =
+(vuln_type, endpoint_path, http_method, parameter)`** — this review's
+own initial proposal (Section 39 review, Decision 1). That tuple is
+Finding-scoped: defined under Section 6.9's own header ("Phase 8: PoC
+Gate") and justified in Section 14's summary specifically for
+report-deduplication reasons ("GET SQLi found by boolean scan ≠ POST
+SQLi found via body injection. Collapsing them loses a valid finding").
+A different concept, at a later lifecycle stage, than hypothesis
+identity. Reusing its shape conflated the two; corrected during advisor
+review on stronger, more directly hypothesis-relevant evidence than the
+original citation used.
+
+**A consequence of coarse identity, stated explicitly rather than left
+implicit:** two structurally different opportunities at the same
+`(vuln_type, endpoint)` — e.g. SQLi on `?id=` vs. SQLi on `?sort=` at
+the same path — now collapse into one `BeliefGraph` node. Not an
+oversight: it is the only granularity consistent with Section 11.1's
+own 500×29 sizing (parameter-level identity would exceed
+`max_nodes=15,000` for any endpoint with several parameters), and it is
+harmless downstream — Section 6.9's Finding-level `DEDUP_KEY`,
+untouched, still 4-tuple, still parameter-aware, is what actually
+governs report deduplication. The BeliefGraph exists for coarse-grained
+Deep Lane prioritization (Section 11's own stated purpose), not
+parameter-level tracking.
+
+**Decision:** `hypothesis_id` is a deterministic function of
+`(vuln_type, endpoint)` only. `http_method`/`parameter` are not part of
+hypothesis identity and are not stored as node attributes at this
+time — not as ID components, not as optional extras. Deferred to Week
+7, when `ExploitCandidate` (item 53, still PROVISIONAL) and Fast Lane →
+BeliefGraph integration are actually designed. Not decided against
+permanently; just not decided here.
+
+**Built:** `core/planning/hypothesis_engine.py`'s
+`make_hypothesis_id(vuln_type, endpoint) -> str`.
+
+## 68. BeliefGraph capacity enforcement: partial (`hypothesis_engine.py` only), not global
+
+**New architectural decision — an explicit stopgap, not a complete
+fix.**
+
+**Current state, verified before this entry was written, not
+assumed:** `belief_manager.BELIEF_GRAPH_LIMITS["max_nodes"]`/
+`["max_edges"]` (Section 11.1, Week 4) are defined but enforced nowhere
+in the codebase. Confirmed by grep against
+`core/cognitive/belief_manager.py` — only the dict's own definition
+matches `max_nodes`/`max_edges`; no comparison, no `raise`, anywhere
+else in the file's 413 lines — and against its test file
+(`tests/core/cognitive/test_belief_manager.py` asserts the dict's
+*values* only, nothing asserts enforcement).
+
+**Decision:** `hypothesis_engine.py`'s `seed_hypothesis` enforces
+`max_nodes` locally, for the one path it owns. Before adding a
+genuinely new node — after the idempotent-reseed short-circuit, so
+re-seeding an existing hypothesis never triggers this check even at a
+full graph — if `graph.number_of_nodes() >= BELIEF_GRAPH_LIMITS["max_nodes"]`,
+it calls the existing `prune_graph` (Week 4, unmodified; same `now`
+passed through, for determinism) once, re-checks, and raises
+`HypothesisGraphCapacityExceeded` only if still full.
+`HypothesisGraphCapacityExceeded` is defined locally in
+`hypothesis_engine.py` — naming and placement precedent:
+`TotalChainBudgetExhausted` in `core/chain/chain_budget.py`, not a
+shared exceptions module. No silent drop.
+
+**Explicit limitation, stated so this item is never read as a global
+fix:** covers only node-creation through `hypothesis_engine.py`. Any
+future Fast Lane → BeliefGraph node-creation path (Week 7+) needs its
+own enforcement, or — architecturally preferable — this gets
+centralized inside `add_belief_node()` itself the next time
+`belief_manager.py` is legitimately reopened. `belief_manager.py` is
+NOT modified by this item; its own `BELIEF_GRAPH_LIMITS` dict is read,
+never written.
+
+**Built:** `core/planning/hypothesis_engine.py`'s `seed_hypothesis`,
+covering the three-state path (room available / full-then-prune-succeeds
+/ full-after-prune-raises) — all three states covered by
+`tests/core/planning/test_hypothesis_engine.py::TestSeedHypothesisCapacityGuard`.
+
+### Items 64's gap, closed: `hypothesis_tree.py` / `hypothesis_engine.py` built
+
+**Scope, per the governing prompt for this entry:** exactly the gap
+item 64 flagged — nothing else. `core/sandbox/` (item 66) and
+`core/cognitive/belief_manager.py` (Week 4) are read, never modified.
+
+**Built:**
+- `core/planning/hypothesis_tree.py` — `add_alternative_relationship`,
+  `get_alternatives_of`, `is_alternative_of`. Plain edge attributes on
+  the existing `BeliefGraph` (`relation_type="alternative_to"` string,
+  `created_at` ISO string) — no class, no state of its own. Empirically
+  verified during the Section 39 review, before any of this was
+  written, that `belief_manager.py`'s existing
+  `serialize_belief_graph`/`deserialize_belief_graph` round-trip
+  arbitrary edge attributes with zero code changes, and that
+  `prune_graph` already drops a pruned node's incident relationship
+  edges automatically via `networkx`'s own standard
+  `remove_nodes_from` behavior. Re-confirmed here with a dedicated test
+  (`TestPruningInteraction`), not just asserted from the review.
+  Only `ALTERNATIVE_TO` — `DERIVED_FROM`/`SUPPORTS`/`CONTRADICTS`
+  remain rejected (Section 39 review, Section 35): grepped the
+  blueprint twice across two independent passes; zero occurrences of
+  any of the three anywhere.
+- `core/planning/hypothesis_engine.py` — `make_hypothesis_id`,
+  `seed_hypothesis`, `generate_alternative`,
+  `HypothesisGraphCapacityExceeded`. The single chokepoint where a
+  hypothesis candidate is validated (non-empty `vuln_type`/`endpoint`,
+  `exploitability_score` and `starting_weight` both in `[0.0, 1.0]` —
+  the latter guards against a silent negative-`beta` corruption in
+  `belief_manager.seed_node` that no existing caller validates against,
+  since none has passed a potentially LLM-sourced value before now —
+  `business_value` a real `BusinessValue` member and not `.UNKNOWN`),
+  given its identity, deduplicated, capacity-checked, and committed.
+  Imports `core/mental_model/_injection_guard.py`'s
+  `detect_injection_markers` as a named, explicit, ratified exception —
+  that module's own docstring updated to add this file to its caller
+  list (six → seven). Detection-only, logged
+  (`[HYPOTHESIS_INJECTION_SUSPECTED]`) not blocking, matching that
+  module's established precedent exactly.
+  `generate_alternative` makes Section 8.3's `HYPOTHESIS_FALSE ->
+  Generate alternative hypothesis` line concrete: both-or-neither
+  atomicity on the node+edge pair (falsified-hypothesis existence
+  checked before any mutation), with no hardcoded probability threshold
+  anywhere in this module — "false" remains a caller-asserted fact
+  (Section 39 review, Decision 5, ratified).
+
+**Testing:** full suite re-run, no path filter: **920 passed** (870
+existing + 50 new — two new files,
+`tests/core/planning/test_hypothesis_tree.py` (19 tests) and
+`tests/core/planning/test_hypothesis_engine.py` (31 tests)). Go
+re-run and unaffected (32/32 — no Go code touched this entry); both
+`scope_guard.go` byte-identity and existing `_injection_guard.py`
+callers' own tests re-checked clean. `belief_manager.py` not modified —
+confirmed by `git diff` showing zero changes to that file in this
+entry's commit.
+
+**Files this entry covers:** `core/planning/hypothesis_tree.py` (new),
+`core/planning/hypothesis_engine.py` (new),
+`tests/core/planning/test_hypothesis_tree.py` (new),
+`tests/core/planning/test_hypothesis_engine.py` (new),
+`core/mental_model/_injection_guard.py` (docstring only — caller list
+six → seven).
 
