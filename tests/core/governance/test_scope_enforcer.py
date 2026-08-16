@@ -8,8 +8,12 @@ import yaml
 
 from core.governance.scope_config_generator import ScopeConfigError
 from core.governance.scope_enforcer import (
+    INTERACTSH_SUFFIX,
+    METADATA_HOSTS,
+    METADATA_IP,
     _is_scope_allowed,
     is_allowed,
+    is_allowed_outbound,
     load_scope_domains_for_enforcement,
 )
 from core.ontology.scope import CredentialValidationAllowlist
@@ -238,3 +242,63 @@ class TestEndToEndAgainstRealScopeYaml:
         domains = load_scope_domains_for_enforcement(real_path)
         assert domains, "configs/scope.yaml must declare at least one scope_domains entry"
         assert is_allowed("https://evil-out-of-scope-host.test/", domains) is False
+
+
+class TestIsAllowedOutbound:
+    """Section 4.4's is_allowed_outbound, now canonical here
+    (docs/DECISIONS.md item 71) rather than in
+    core/sandbox/safety_guard.py. Same coverage as that module's own
+    `TestIsAllowedOutbound` (which still exists, unmodified, and still
+    passes -- item 71's before/after requirement) -- duplicated here
+    deliberately: this module is now the function's real home, and its
+    own test file should prove that directly, not rely solely on a
+    different module's tests exercising it via import."""
+
+    def test_in_scope_host_allowed(self):
+        assert is_allowed_outbound("api.example.com", None, ["*.example.com"]) is True
+
+    def test_interactsh_subdomain_allowed(self):
+        assert is_allowed_outbound("xbow123.interactsh.com", None, []) is True
+
+    def test_bare_interactsh_domain_not_allowed_by_this_branch(self):
+        """Section 4.4's own code is `dst_host.endswith('.interactsh.com')`
+        -- deliberately excludes the bare domain itself, unlike a
+        *.interactsh.com wildcard scope-domain entry would."""
+        assert is_allowed_outbound("interactsh.com", None, []) is False
+
+    def test_metadata_hostname_allowed(self):
+        for host in METADATA_HOSTS:
+            assert is_allowed_outbound(host, None, []) is True
+
+    def test_metadata_ip_literal_as_host_allowed(self):
+        assert is_allowed_outbound(METADATA_IP, None, []) is True
+
+    def test_dst_ip_resolving_to_metadata_ip_allowed(self):
+        """The DNS-rebinding case: a hostname that is not itself a known
+        metadata host, but resolves to the metadata IP."""
+        assert is_allowed_outbound("innocuous-looking.example", METADATA_IP, []) is True
+
+    def test_unrelated_host_denied(self):
+        assert is_allowed_outbound("evil.com", None, ["*.example.com"]) is False
+
+    def test_none_host_fails_closed(self):
+        assert is_allowed_outbound(None, None, ["*.example.com"]) is False
+
+    def test_none_dst_ip_does_not_crash_and_does_not_grant(self):
+        assert is_allowed_outbound("evil.com", None, ["*.example.com"]) is False
+
+    def test_reuses_is_scope_allowed_not_a_second_implementation(self):
+        """item 71's whole point: the "scope" branch of is_allowed_outbound
+        must be the SAME _is_scope_allowed this module already exports,
+        not a re-derived copy. Proven behaviorally (a wildcard match
+        that only _is_scope_allowed's exact algorithm would resolve
+        correctly), not by inspecting source."""
+        assert is_allowed_outbound("sub.example.com", None, ["*.example.com"]) is _is_scope_allowed(
+            "sub.example.com", ["*.example.com"]
+        )
+
+    def test_interactsh_suffix_constant_matches_the_branch_it_backs(self):
+        assert INTERACTSH_SUFFIX == ".interactsh.com"
+
+    def test_metadata_ip_constant_matches_the_branch_it_backs(self):
+        assert METADATA_IP == "169.254.169.254"

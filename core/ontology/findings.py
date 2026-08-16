@@ -30,6 +30,14 @@ substitute counting rule (1 slot)"):
                   own poc_generator.py stub or Week 6) is actually built.
                   See docs/DECISIONS.md Week 1 section.
 
+WEEK 7 UPDATE (docs/DECISIONS.md item 69): `ExploitCandidate` built.
+File ownership (item 53's PROVISIONAL placement, open since item 10)
+confirmed here as final -- see the class's own docstring for the
+project owner's reasoning and the still-unrebutted counter-argument,
+logged rather than silently dropped. `PoC` remains deferred; nothing in
+this week's scope constructs one (item 10's own reasoning for `PoC`
+still holds unchanged).
+
 `compute_triage_score` lives here, not in core/verifier/autonomous_triage.py,
 because it is pure arithmetic over TriageResult -- the enum defined in
 this same file -- with no I/O and no scanner-specific behavior. Putting it
@@ -47,6 +55,7 @@ docs/DECISIONS.md Week 1 section for the full reasoning.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 
@@ -76,6 +85,124 @@ _MAX_TRIAGE_SCORE = 3.0
 # Section 6.8: "strength = round(0.7 * evidence_ratio + 0.3 * triage_ratio, 3)"
 _EVIDENCE_RATIO_WEIGHT = 0.7
 _TRIAGE_RATIO_WEIGHT = 0.3
+
+
+@dataclass
+class ExploitCandidate:
+    """Fast Lane's raw scanner output (Section 8.1: "FastLane ->
+    BeliefGraph: ExploitCandidate list"; Section 7.10's usage,
+    "lfi_scanner.py... returns 0 ExploitCandidates"). One instance per
+    positive detection event, upstream of and structurally simpler than
+    `Finding` -- nothing here has been triaged, evidence-collected, or
+    verified yet; that is what the rest of this file's pipeline
+    (`Evidence`, `EvidenceChain`, `Finding`) does to a candidate that
+    survives long enough to matter.
+
+    FILE OWNERSHIP -- CONFIRMED, NOT JUST PROVISIONAL (docs/DECISIONS.md
+    item 69, resolving item 53): lives here, in `findings.py`, not
+    `core/ontology/surface.py`. Reasoning beyond item 53's own textual
+    argument (4 of `ExploitCandidate`'s 5 findings.py list-mates already
+    confirmed to live here): `ExploitCandidate` reads into `Finding`
+    downstream, so one file avoids needless cross-file coupling between
+    two types in the same maturation pipeline; and shape-wise, this
+    class is a per-vulnerability-instance record, closer to `Finding`
+    (also per-instance) than to `EndpointSignals` (a per-endpoint
+    aggregate, core/ontology/surface.py, item 70). The Fast-Lane-thematic
+    counter-argument item 53 logged -- that raw scanner output belongs
+    with `surface.py`'s other raw-reconnaissance types -- is REAL and
+    UNREBUTTED; the call is made anyway, for the reasons above. Recorded
+    here, not silently dropped, per the same discipline item 53 itself
+    modeled.
+
+    FIELDS -- four provenances, each documented at its own attribute
+    below: (1) directly blueprint-cited, (2) authored to make an
+    already-cited downstream consumer computable, (3) authored and
+    scoped to Batch 1 only (docs/DECISIONS.md item 69's own build
+    order), pending confirmation against Batches 2-7's actual scanners.
+
+    Attributes:
+        vuln_type: One of the 29 scanner-registry keys. Same convention
+            as `Finding.vuln_type` / `EvidenceChain.vuln_type` (plain
+            `str`, not a new enum -- same reasoning as both: no
+            "VulnType" enum exists, `SCANNER_REGISTRY` (Week 5) is the
+            real source of truth once populated).
+        endpoint: The endpoint this candidate concerns. Same convention
+            as `Finding.endpoint` (Section 8.1's flow, matches
+            `make_hypothesis_id`'s own parameter name).
+        http_method: Section 6.9's `DEDUP_KEY = (vuln_type,
+            endpoint_path, http_method, parameter)` -- the field
+            week7_kickoff.md names as deferred to this week. GET vs.
+            POST SQLi on the same endpoint are different findings
+            (Section 6.9); a candidate must carry this from the moment
+            a scanner raises it, not have it reconstructed later.
+        parameter: Same `DEDUP_KEY` citation. Required, not defaulted
+            (see class docstring above on why `parameter`, unlike
+            `payload_used`/`raw_response_snapshot`/`probe_correlation_id`
+            below, forces an explicit choice) -- but nullable: CORS
+            (Origin header, not a query/body parameter), Host Header
+            (Host header), CSRF (whole-form action), and Auth
+            (state-machine test name, e.g. "session_fixation") all lack
+            a single query/body parameter in the conventional sense.
+            Confirmed as the four no-single-parameter cases
+            (docs/DECISIONS.md item 69); every other vuln_type is
+            expected to supply a real value.
+        detected_by: The `SCANNER_REGISTRY` key of the scanner that
+            raised this candidate (Section 4.4's `caller_id` convention,
+            e.g. `"xss_scanner"`). AUTHORED, not cited verbatim anywhere
+            as an `ExploitCandidate` field -- added because Section
+            7.29's `cross_scanner` definition for Nuclei ("a NON-Nuclei
+            scanner also flagged the same endpoint") is uncomputable
+            later without knowing which scanner raised which candidate,
+            and the same need generalizes to every other vuln_type's own
+            `cross_scanner` evidence type (Section 5.1).
+        detected_at: When this candidate was raised. AUTHORED -- needed
+            for Section 11.2's BeliefGraph pruning windows
+            (`last_updated > 60 min AND probability < 0.15 -> prune`)
+            once this candidate becomes a hypothesis node, and general
+            session chronology (Section 6.1). Defaults to the
+            construction-time UTC timestamp (same "sensible default,
+            overridable for deterministic tests" pattern already used by
+            `belief_manager.add_belief_node`'s and
+            `hypothesis_engine.seed_hypothesis`'s own `now` parameters)
+            rather than requiring every one of the 29 scanners to pass
+            it explicitly.
+        payload_used: The exact payload or probe value that produced
+            this signal (e.g. an XSS reflection string, a SQLi UNION
+            probe). AUTHORED, Batch 1 only (docs/DECISIONS.md item 69):
+            confirmed sufficient for xss/sqli/ssti/lfi/path_traversal
+            (Batch 1), none of which need count-based evidence. NOT yet
+            confirmed sufficient for Batches 2-7 -- Race's
+            `success_count`/`total` (Section 7.5) is already flagged as
+            a concrete case none of this class's three Batch-1 fields
+            can express; the first later-batch scanner that hits this
+            gap stops and flags it back rather than silently reaching
+            for a new field or a dict (docs/DECISIONS.md item 69,
+            per the Engineering Constitution's ontology-first rule).
+        raw_response_snapshot: Truncated response body backing the
+            signal, same 512-character convention as `call_target()`'s
+            `body_preview` (Section 10.7) and `race.go`'s `BodyPreview`
+            -- the value stored here is expected to already be
+            truncated by the caller (this class does no truncation or
+            other validation itself, matching this file's existing thin-
+            dataclass convention throughout: `EvidenceChain`, `Evidence`,
+            and `Finding` above also perform no `__post_init__`
+            validation on their own fields).
+        probe_correlation_id: The interactsh correlation ID (Section
+            4.2: `correlation_id = f"XBOW_{session_id}_{nonce}"`) for
+            OOB-based detections -- covers Batch 2's CMDi/XXE/
+            Deserialization/SSRF/Host Header. `None` for every other
+            vuln_type, including all of Batch 1.
+    """
+
+    vuln_type: str
+    endpoint: str
+    http_method: str
+    parameter: str | None
+    detected_by: str
+    detected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    payload_used: str | None = None
+    raw_response_snapshot: str | None = None
+    probe_correlation_id: str | None = None
 
 
 class TriageResult(str, Enum):

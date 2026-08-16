@@ -50,10 +50,15 @@ the BeliefGraph exists for coarse-grained Deep Lane prioritization
 parameters.
 
 `http_method`/`parameter` ARE NOT STORED anywhere by this module -- not
-as ID components, not as node attributes, not as optional extras.
-Deferred to Week 7, when `ExploitCandidate` (docs/DECISIONS.md item 53,
-still PROVISIONAL) and Fast Lane -> BeliefGraph integration are actually
-designed.
+as ID components, not as node attributes, not as optional extras. This
+remains true after Week 7's `record_fast_lane_signal` (below,
+docs/DECISIONS.md item 72): it is deliberately scoped to the identical
+`(vuln_type, endpoint)` granularity as `seed_hypothesis`, not
+`ExploitCandidate`'s finer 4-tuple (`ExploitCandidate` itself,
+docs/DECISIONS.md item 69, resolves item 53's PROVISIONAL marking to
+final -- `core/ontology/findings.py`, not this module).
+`http_method`/`parameter` live on `ExploitCandidate`; this module's
+identity granularity is unchanged by their existing elsewhere.
 
 CAPACITY ENFORCEMENT -- LOCAL AND PARTIAL, NOT GLOBAL (docs/DECISIONS.md
 item 68): `belief_manager.BELIEF_GRAPH_LIMITS["max_nodes"]`/
@@ -69,6 +74,17 @@ Fast Lane -> BeliefGraph path (Week 7+) needs its own enforcement, or --
 architecturally preferable -- this gets centralized inside
 `add_belief_node` itself the next time `belief_manager.py` is
 legitimately reopened. Not claimed as a global fix.
+
+WEEK 7 RESOLUTION (docs/DECISIONS.md item 72): `record_fast_lane_signal`
+is that Fast Lane -> BeliefGraph path, and it takes the non-"architecturally
+preferable" branch this note flagged above -- it calls `seed_hypothesis`,
+inheriting this module's existing capacity guard for free, rather than
+centralizing enforcement inside `add_belief_node` itself. Confirmed
+decision (week7_kickoff.md Phase 0 item 7's answer, adopted as-is): a
+second guarded path into `add_belief_node` was explicitly rejected in
+favor of joining the one that already exists. `add_belief_node` itself
+remains exactly as unguarded as this paragraph originally described --
+still true, not superseded.
 
 `_injection_guard.py` IMPORT -- NAMED, EXPLICIT EXCEPTION (ratified):
 this module is the seventh caller of `core/mental_model/_injection_guard.py`,
@@ -275,6 +291,109 @@ def seed_hypothesis(
         now=timestamp,
     )
     return hypothesis_id
+
+
+def record_fast_lane_signal(
+    graph: nx.DiGraph,
+    *,
+    vuln_type: str,
+    endpoint: str,
+    starting_weight: float,
+    business_value: BusinessValue,
+    exploitability_score: float = 0.5,
+    now: datetime | None = None,
+    tech_risk: float | None = None,
+    dynamism: float | None = None,
+) -> str:
+    """Fast Lane's entry point into the BeliefGraph (Section 8.1:
+    "FastLane -> BeliefGraph: ExploitCandidate list"; Section 6.6:
+    "BeliefGraph updates: alpha += 1 on signal, beta += 1 on no-signal"
+    -- the ALPHA/BETA UPDATE half of that sentence is `belief_manager.
+    update_node`, already built, Week 4, unchanged, and out of scope for
+    this function; this function is the SEEDING half, for a vuln_type/
+    endpoint pair Fast Lane is observing for the first time this
+    session).
+
+    A thin wrapper over `seed_hypothesis`, not a new path into
+    `add_belief_node` (docs/DECISIONS.md item 72, resolving
+    week7_kickoff.md Phase 0 items 5 and 7 together): calling
+    `seed_hypothesis` means this function inherits its capacity guard
+    (`HypothesisGraphCapacityExceeded` on a still-full graph after one
+    `prune_graph` attempt) for free -- see this module's own docstring,
+    "WEEK 7 RESOLUTION," for why the alternative (centralizing
+    enforcement inside `add_belief_node` itself) was flagged but not
+    taken this week. `add_belief_node` gains no new caller and no new
+    behavior from this addition.
+
+    `starting_weight` IS THIS FUNCTION'S PARAMETER, NOT ITS LOOKUP: the
+    caller (Fast Lane orchestration, not yet built) is expected to
+    resolve it from `vuln_weights.yaml`'s per-vuln_type
+    `starting_weights` (Section 9.5) before calling this function, the
+    same way `seed_hypothesis`'s own callers already do. This function
+    performs no file I/O and reads no YAML itself, matching the
+    "ontology/planning types do no file I/O" precedent already
+    established for `EvidenceChain.min_required`
+    (`core/verifier/evidence_chain.py` resolves it from
+    `vuln_thresholds.yaml`, not `EvidenceChain` itself).
+
+    `tech_risk`/`dynamism` ARE TRUE NO-OPS THIS WEEK (week7_kickoff.md
+    Phase 0 item 5's own explicit instruction, quoted: "design its
+    signature to accept future optional fields ... even though you are
+    NOT implementing what populates them this week ... Do not build the
+    extension itself"): accepted here so a currently-separate,
+    not-yet-approved extension doesn't need to reopen this function's
+    signature later, then discarded -- not logged, not validated, not
+    threaded into `seed_hypothesis` or `add_belief_node`, not stored
+    anywhere. Neither parameter appears anywhere else in this function's
+    body; this is deliberate, not an oversight.
+
+    FLAT KWARGS, NOT A SINGLE `ExploitCandidate` PARAMETER (docs/
+    DECISIONS.md item 72, per the build order's explicit instruction):
+    `core.ontology.findings.ExploitCandidate` (item 69) exists as of
+    this same bundle, but this function is not refactored to take one
+    directly yet -- prove the flat version against Batch 1's real
+    scanners first, then collapse to `ExploitCandidate` once it has
+    actually been exercised, not before. Note the resulting overlap
+    this creates deliberately, not by accident: an `ExploitCandidate`
+    carries `http_method`/`parameter`/`detected_by`/etc. that this
+    function's flat signature has no parameter for at all -- callers
+    pass this function only the subset `seed_hypothesis` needs
+    (`vuln_type`, `endpoint`, plus the BeliefGraph-specific
+    `starting_weight`/`business_value`/`exploitability_score`), and are
+    expected to separately construct and retain their own
+    `ExploitCandidate` for whatever else consumes it (Verification,
+    eventually) -- this function does not build, receive, or return one.
+
+    Args:
+        graph: The `networkx.DiGraph` `BeliefGraph` to seed into.
+        vuln_type: See `make_hypothesis_id`.
+        endpoint: See `make_hypothesis_id`.
+        starting_weight: See `seed_hypothesis`. Caller-resolved; see
+            above.
+        business_value: See `seed_hypothesis`.
+        exploitability_score: See `seed_hypothesis`.
+        now: See `seed_hypothesis`.
+        tech_risk: Unused this week. See above.
+        dynamism: Unused this week. See above.
+
+    Returns:
+        The hypothesis's `hypothesis_id` (existing or newly-created) --
+        identical return value and semantics to `seed_hypothesis`,
+        since that is the entirety of this function's implementation.
+
+    Raises:
+        ValueError: See `seed_hypothesis`.
+        HypothesisGraphCapacityExceeded: See `seed_hypothesis`.
+    """
+    return seed_hypothesis(
+        graph,
+        vuln_type=vuln_type,
+        endpoint=endpoint,
+        starting_weight=starting_weight,
+        business_value=business_value,
+        exploitability_score=exploitability_score,
+        now=now,
+    )
 
 
 def generate_alternative(

@@ -17,6 +17,7 @@ from core.planning.hypothesis_engine import (
     HypothesisGraphCapacityExceeded,
     generate_alternative,
     make_hypothesis_id,
+    record_fast_lane_signal,
     seed_hypothesis,
 )
 from core.planning.hypothesis_tree import get_alternatives_of, is_alternative_of
@@ -370,3 +371,124 @@ class TestGenerateAlternative:
         assert is_alternative_of(graph, h2, h1) is True
         assert is_alternative_of(graph, h3, h2) is True
         assert is_alternative_of(graph, h3, h1) is False  # not transitive, by design
+
+
+class TestRecordFastLaneSignal:
+    """docs/DECISIONS.md item 72 -- Fast Lane's entry point into the
+    BeliefGraph. A thin wrapper over seed_hypothesis; these tests focus
+    on confirming the delegation actually happens (identical resulting
+    graph state, inherited capacity guard, tech_risk/dynamism as true
+    no-ops) rather than re-proving every validation rule
+    TestSeedHypothesisValidation already covers exhaustively."""
+
+    def test_produces_the_same_hypothesis_id_as_seed_hypothesis(self):
+        graph_a = new_belief_graph()
+        graph_b = new_belief_graph()
+
+        id_a = seed_hypothesis(
+            graph_a, vuln_type="xss", endpoint="/search", starting_weight=0.65,
+            business_value=BusinessValue.HIGH, now=_NOW,
+        )
+        id_b = record_fast_lane_signal(
+            graph_b, vuln_type="xss", endpoint="/search", starting_weight=0.65,
+            business_value=BusinessValue.HIGH, now=_NOW,
+        )
+        assert id_a == id_b
+
+    def test_produces_an_identical_node_to_seed_hypothesis(self):
+        """Not just the same ID -- the same alpha/beta/exploitability_score/
+        business_value/last_updated node attributes too, confirming this
+        is a pure delegation with no side effects of its own."""
+        graph_a = new_belief_graph()
+        graph_b = new_belief_graph()
+
+        id_a = seed_hypothesis(
+            graph_a, vuln_type="sqli", endpoint="/login", starting_weight=0.55,
+            business_value=BusinessValue.MEDIUM, exploitability_score=0.8, now=_NOW,
+        )
+        id_b = record_fast_lane_signal(
+            graph_b, vuln_type="sqli", endpoint="/login", starting_weight=0.55,
+            business_value=BusinessValue.MEDIUM, exploitability_score=0.8, now=_NOW,
+        )
+        assert dict(graph_a.nodes[id_a]) == dict(graph_b.nodes[id_b])
+
+    def test_idempotent_on_re_record(self):
+        graph = new_belief_graph()
+        id1 = record_fast_lane_signal(
+            graph, vuln_type="xss", endpoint="/a", starting_weight=0.5,
+            business_value=BusinessValue.MEDIUM, now=_NOW,
+        )
+        id2 = record_fast_lane_signal(
+            graph, vuln_type="xss", endpoint="/a", starting_weight=0.9,
+            business_value=BusinessValue.HIGH, now=_NOW,
+        )
+        assert id1 == id2
+        assert graph.number_of_nodes() == 1
+
+    def test_validation_is_delegated_not_reimplemented(self):
+        """Spot check, not exhaustive -- TestSeedHypothesisValidation
+        already covers every rule; this confirms record_fast_lane_signal
+        doesn't silently swallow or duplicate that logic."""
+        graph = new_belief_graph()
+        with pytest.raises(ValueError, match="vuln_type"):
+            record_fast_lane_signal(
+                graph, vuln_type="", endpoint="/a", starting_weight=0.5,
+                business_value=BusinessValue.MEDIUM, now=_NOW,
+            )
+
+    def test_capacity_guard_is_inherited_from_seed_hypothesis(self, monkeypatch):
+        """Mirrors TestSeedHypothesisCapacityGuard::test_full_after_prune_raises
+        exactly, substituting record_fast_lane_signal for the final call
+        -- confirms item 72's central claim: no second, unguarded path
+        into add_belief_node exists."""
+        monkeypatch.setitem(belief_manager.BELIEF_GRAPH_LIMITS, "max_nodes", 2)
+        graph = new_belief_graph()
+        add_belief_node(
+            graph, hypothesis_id="pinned1", vuln_type="xss", endpoint="/a",
+            starting_weight=0.5, business_value=BusinessValue.MEDIUM,
+            pinned_until=_NOW + timedelta(hours=1), now=_NOW,
+        )
+        add_belief_node(
+            graph, hypothesis_id="pinned2", vuln_type="sqli", endpoint="/b",
+            starting_weight=0.5, business_value=BusinessValue.MEDIUM,
+            pinned_until=_NOW + timedelta(hours=1), now=_NOW,
+        )
+
+        with pytest.raises(HypothesisGraphCapacityExceeded, match="2/2"):
+            record_fast_lane_signal(
+                graph, vuln_type="lfi", endpoint="/new", starting_weight=0.5,
+                business_value=BusinessValue.MEDIUM, now=_NOW,
+            )
+        assert graph.number_of_nodes() == 2
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"tech_risk": 0.9},
+            {"dynamism": 0.3},
+            {"tech_risk": 0.9, "dynamism": 0.3},
+            {"tech_risk": None, "dynamism": None},
+        ],
+    )
+    def test_tech_risk_and_dynamism_are_true_no_ops(self, kwargs):
+        """week7_kickoff.md Phase 0 item 5's explicit instruction:
+        accepted for forward-compatible signature stability, discarded
+        -- not logged, not validated, not stored, not threaded into
+        seed_hypothesis or add_belief_node. Proven here by confirming
+        passing them (any combination, including explicit None) produces
+        a byte-for-byte identical node to not passing them at all."""
+        graph_with = new_belief_graph()
+        graph_without = new_belief_graph()
+
+        id_with = record_fast_lane_signal(
+            graph_with, vuln_type="ssrf", endpoint="/fetch", starting_weight=0.4,
+            business_value=BusinessValue.LOW, now=_NOW, **kwargs,
+        )
+        id_without = record_fast_lane_signal(
+            graph_without, vuln_type="ssrf", endpoint="/fetch", starting_weight=0.4,
+            business_value=BusinessValue.LOW, now=_NOW,
+        )
+        assert dict(graph_with.nodes[id_with]) == dict(graph_without.nodes[id_without])
+        # And neither key ever appears as a node attribute:
+        assert "tech_risk" not in graph_with.nodes[id_with]
+        assert "dynamism" not in graph_with.nodes[id_with]

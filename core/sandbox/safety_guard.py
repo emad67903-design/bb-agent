@@ -8,47 +8,40 @@ except interactsh + metadata + scope"), and Section 10.7's pre-approved
         "headers": dict, "body_preview": str (512 chars)}'''
 Blueprint: bb_agent_v6.6_final_blueprint.md
 
-WHERE "interactsh + metadata + scope" COMES FROM (docs/DECISIONS.md item
-66): Section 3's one-line comment for this file is not a free-standing
-spec -- it is describing the exact same three-way policy Section 4.4
-already writes out in full, in a function of that name:
-
-    METADATA_HOSTS = frozenset({'169.254.169.254', 'metadata.google.internal'})
-    def is_allowed_outbound(dst_host: str, dst_ip: str, scope_domains: set[str]) -> bool:
-        return (
-            dst_host.endswith('.interactsh.com')
-            or dst_host in METADATA_HOSTS
-            or dst_ip == '169.254.169.254'
-            or _is_scope_allowed(dst_host, scope_domains)
-        )
-
-Section 4.4 titles that block "Python HTTP layer (scope_enforcer.py +
-intercepting_client.py)" -- a different call site than this file's own
-(the sandbox's `call_target()`) -- but the POLICY itself ("what is this
-codebase willing to let something call out to, beyond its own
-scope_domains") is the same policy by construction: `call_target()`
-needs the identical exceptions `is_allowed_outbound` already grants
-(interactsh, for OOB vulnerability confirmation; the cloud metadata
-endpoints, for SSRF PoC verification -- Section 7.3's whole IMDSv2 probe
-matrix is exactly this: an in-scope-app SSRF bug being confirmed by
-reaching an out-of-scope metadata IP on purpose). `is_allowed_outbound`
-itself was never actually built anywhere in this codebase before this
-week (grep-confirmed against `core/http/intercepting_client.py`, its
-would-be Week-5 home per Section 4.4's own text -- it references
-`scope_enforcer.py` in one docstring sentence and calls nothing from
-it). This file is that function's first real implementation, scoped to
-its first real caller.
+WHERE "interactsh + metadata + scope" COMES FROM, AND WHERE IT LIVES NOW
+(docs/DECISIONS.md items 66 and 71): Section 3's one-line comment for
+this file is not a free-standing spec -- it describes the same
+three-way policy Section 4.4 writes out in full, in a function of that
+name. Week 6 (item 66) built that function's first real implementation
+here, scoped local, because nothing else in the codebase needed it yet.
+Week 7 (item 71) moved the function itself -- and its three constants,
+`INTERACTSH_SUFFIX` / `METADATA_HOSTS` / `METADATA_IP` -- to
+`core/governance/scope_enforcer.py`, imported below, once
+CMDi/XXE/Deserialization/SSRF scanners needed the identical policy on
+the `RateLimitedClient` side. This file's own `is_allowed_outbound` /
+`check_outbound` / `_augmented_scope_domains` behavior is UNCHANGED by
+that move -- same inputs, same outputs, same fail-closed-on-`None`
+semantics -- confirmed by running this file's existing 25 tests
+unmodified before and after the refactor (docs/DECISIONS.md item 71).
+Only the function's DEFINITION moved; the CALL SITE (this file's
+`check_outbound`, still the one and only thing `call_target()` asks)
+did not, preserving Section 10.2's "four independent layers" framing --
+this file still makes its own decision, at its own point in the code,
+independent of `browser_tool.py`/`RateLimitedClient`/the Go services.
 
 `_is_scope_allowed` IS IMPORTED FROM `scope_enforcer.py`, NOT
-REIMPLEMENTED: the wildcard-matching algorithm is the SAME algorithm
-Week 3 already wrote, tested, and Section 4.4 defines once. Reusing it
-here is not a second, drifting copy of the logic -- it is the "scope"
-third of "interactsh + metadata + scope", literally the same scope. What
-IS independent, per Section 10.2's "four independent layers" framing, is
-the ENFORCEMENT CALL SITE: this file makes its own decision, at its own
-point in the code, and nothing about the sandbox depends on
-`browser_tool.py`, `RateLimitedClient`, or the Go services being correct
-for `call_target()` to also be correct.
+REIMPLEMENTED, same as before item 71 and for the same reason: the
+wildcard-matching algorithm is the SAME algorithm Week 3 already wrote,
+tested, and Section 4.4 defines once. `is_allowed_outbound` now follows
+the identical precedent -- imported, not reimplemented -- rather than
+this file continuing to hold a second, independently-maintained copy
+that had already started drifting from `scope_enforcer.is_allowed`'s
+own signature conventions (`list[str]` for `scope_domains` throughout
+this module vs. Section 4.4's literal `set[str]`; this file's version
+already used `list[str]`, matching this module's `_is_scope_allowed`
+import rather than the blueprint's bare snippet -- one more concrete
+sign the two copies were two maintenance burdens, not one, even before
+any behavior actually diverged).
 
 `dst_ip`-BASED CHECKING IS A REAL DNS RESOLUTION, NOT A STRING
 SHORTCUT: an earlier design considered simply appending
@@ -103,13 +96,14 @@ import urllib.parse
 
 import httpx
 
-from core.governance.scope_enforcer import _is_scope_allowed
+from core.governance.scope_enforcer import (
+    INTERACTSH_SUFFIX,
+    METADATA_HOSTS,
+    METADATA_IP,
+    is_allowed_outbound,
+)
 from core.http.intercepting_client import InterceptingClient
 from core.http.rate_limited_client import RateLimitedClient, RateLimiter
-
-INTERACTSH_SUFFIX = ".interactsh.com"
-METADATA_HOSTS = frozenset({"169.254.169.254", "metadata.google.internal"})
-METADATA_IP = "169.254.169.254"
 
 CALL_TARGET_BODY_PREVIEW_CHARS = 512
 
@@ -135,34 +129,6 @@ def _resolve_ip(host: str) -> str | None:
         return socket.gethostbyname(host)
     except (socket.gaierror, OSError):
         return None
-
-
-def is_allowed_outbound(dst_host: str | None, dst_ip: str | None, scope_domains: list[str]) -> bool:
-    """Section 4.4's `is_allowed_outbound`, verbatim (module docstring
-    explains why this file, not `scope_enforcer.py`, is its first real
-    caller).
-
-    Args:
-        dst_host: The destination URL's hostname, or `None` if it could
-            not be parsed (fails closed -- see Returns).
-        dst_ip: The destination hostname's resolved IP, or `None` if
-            resolution failed or was not attempted.
-        scope_domains: The program's in-scope domain patterns.
-
-    Returns:
-        `True` if `dst_host` is an interactsh subdomain, a known cloud
-        metadata hostname, resolves to the metadata IP, or is in scope
-        (via `scope_enforcer._is_scope_allowed`'s wildcard matching).
-        `False` (fail closed) if `dst_host` is `None`.
-    """
-    if dst_host is None:
-        return False
-    return (
-        dst_host.endswith(INTERACTSH_SUFFIX)
-        or dst_host in METADATA_HOSTS
-        or dst_ip == METADATA_IP
-        or _is_scope_allowed(dst_host, scope_domains)
-    )
 
 
 def check_outbound(url: str, scope_domains: list[str]) -> bool:

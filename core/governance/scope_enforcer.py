@@ -64,18 +64,49 @@ state; this codebase made `scope_domains` explicit at Week 3, so
 `credential_validation_allowlist` follows that same, now-established
 pattern.
 
-Still deliberately NOT built here (still gaps, not silently resolved):
-  - `is_allowed_outbound` / `METADATA_HOSTS` / the `.interactsh.com` and
-    169.254.169.254 exceptions (Section 4.4). These back the *Python
-    HTTP layer* (`intercepting_client.py`), not Playwright -- Section
-    4.4 titles that code block "Python HTTP layer
-    (scope_enforcer.py + intercepting_client.py)" specifically, and
-    `intercepting_client.py`'s own Week 5 implementation does not import
-    or reference this module at all (grep-confirmed: one docstring
-    mention, zero calls). `browser_tool.py`'s own scope-check skeleton
-    (Section 3) calls only `is_allowed(url)` -- never
-    `is_allowed_outbound` -- so nothing built so far needs it.
-  - Wiring `credential_validation_allowlist` into `RateLimitedClient`
+Built here (this file), Week 7 (docs/DECISIONS.md item 71 -- supersedes
+this note's own prior text, which is preserved below the line for the
+record rather than deleted): `is_allowed_outbound` / `METADATA_HOSTS` /
+`METADATA_IP` / `INTERACTSH_SUFFIX`, Section 4.4 verbatim. Moved here
+from `core/sandbox/safety_guard.py` (its first real implementation,
+Week 6, docs/DECISIONS.md item 66), which now imports all four names
+from this module instead of keeping its own copy. Prompted by Week 7's
+CMDi/XXE/Deserialization/SSRF scanners needing the identical
+interactsh+metadata+scope policy through the main
+`RateLimitedClient`/`InterceptingClient` path, not the sandbox's
+locally-scoped one. The layering concern item 66 raised implicitly by
+choosing to stay local ("this file makes its own decision... nothing
+about the sandbox depends on `browser_tool.py`, `RateLimitedClient`, or
+the Go services being correct") is about the ENFORCEMENT CALL SITE
+staying independent per Section 10.2's four-layer framing -- it was
+never a claim that `core/sandbox` importing FROM `core/governance` is
+itself architecturally barred, and no such barrier exists: this file's
+own `_is_scope_allowed` was already imported by `safety_guard.py`
+(line 106) before this change, so a second, larger import from the same
+module changes nothing about that direction. Each of `is_allowed`,
+`is_allowed_outbound`, and Go's `scope_guard.go` remains an independent
+CALL, exactly as before -- only the Python-side FUNCTION DEFINITION
+itself is now singular rather than duplicated between two files that
+had started drifting apart in signature already (see `is_allowed_outbound`'s
+own docstring below for the `str | None`/`list[str]` vs. this note's
+original `str`/`set[str]` mismatch that made the duplication concrete,
+not just theoretical, before this consolidation).
+
+ORIGINAL (Week 3-6) TEXT, preserved for the record -- no longer
+accurate as of item 71, kept so this docstring's own history is
+traceable rather than silently rewritten: "Still deliberately NOT built
+here (still gaps, not silently resolved): `is_allowed_outbound` /
+`METADATA_HOSTS` / the `.interactsh.com` and 169.254.169.254 exceptions
+(Section 4.4). These back the Python HTTP layer
+(`intercepting_client.py`), not Playwright... `intercepting_client.py`'s
+own Week 5 implementation does not import or reference this module at
+all... `browser_tool.py`'s own scope-check skeleton calls only
+`is_allowed(url)` -- never `is_allowed_outbound` -- so nothing built so
+far needs it." That premise (nothing built needs it) is what changed:
+Week 7's OOB-confirmed scanner batch is the first real caller on the
+`RateLimitedClient` side.
+
+Wiring `credential_validation_allowlist` into `RateLimitedClient`
     (Week 5) or `call_target()` (sandbox, this week). `is_allowed()`
     itself now supports the exemption end-to-end, but no caller
     constructs a `RateLimitedClient` with
@@ -106,6 +137,13 @@ from pathlib import Path
 
 from core.governance.scope_config_generator import load_scope_domains
 from core.ontology.scope import CredentialValidationAllowlist
+
+# Section 4.4's is_allowed_outbound exceptions (docs/DECISIONS.md item 71;
+# moved from core/sandbox/safety_guard.py, which now imports these three
+# names from here instead of defining its own copies).
+INTERACTSH_SUFFIX = ".interactsh.com"
+METADATA_HOSTS = frozenset({"169.254.169.254", "metadata.google.internal"})
+METADATA_IP = "169.254.169.254"
 
 
 def _is_scope_allowed(dst_host: str | None, scope_domains: list[str]) -> bool:
@@ -203,6 +241,57 @@ def is_allowed(
     ):
         return True
     return False
+
+
+def is_allowed_outbound(dst_host: str | None, dst_ip: str | None, scope_domains: list[str]) -> bool:
+    """Section 4.4's `is_allowed_outbound`, verbatim -- the three-way
+    "interactsh + metadata + scope" policy (Section 3's `safety_guard.py`
+    comment), now canonical here rather than duplicated (docs/DECISIONS.md
+    item 71). Ported unchanged from `core/sandbox/safety_guard.py`'s
+    Week 6 implementation (item 66), including that version's `dst_host
+    is None` fail-closed handling -- not literally Section 4.4's bare
+    code block (which has no None-handling at all, consistent with every
+    other Section 4.4 pseudocode snippet in this codebase, e.g.
+    `_is_scope_allowed` above already adds the same handling for the
+    same reason).
+
+    Intended callers: anything on the *Python HTTP layer* side needing
+    the interactsh/metadata exceptions `is_allowed()` alone does not
+    grant -- Week 7's CMDi/XXE/Deserialization/SSRF scanners (OOB
+    confirmation, IMDSv2 metadata probing) via `RateLimitedClient`, and
+    `core/sandbox/safety_guard.py`'s `call_target()` (unchanged
+    behavior, now via import). `is_allowed()` itself is NOT changed by
+    this addition -- Playwright/`browser_tool.py`'s scope check still
+    calls only `is_allowed()`, deliberately: Section 4.4 titles the
+    interactsh/metadata exceptions as backing the Python HTTP layer
+    specifically, not Playwright, and nothing in this change extends
+    that policy to a call site Section 4.4 never named.
+
+    Args:
+        dst_host: The destination URL's hostname, or `None` if it could
+            not be parsed (fails closed -- see Returns).
+        dst_ip: The destination hostname's resolved IP, or `None` if
+            resolution failed or was not attempted. Real DNS resolution
+            (e.g. `safety_guard._resolve_ip`) is the caller's
+            responsibility -- this function only compares the value it's
+            given, matching Section 4.4's own signature, which takes
+            `dst_ip` as a parameter rather than resolving it internally.
+        scope_domains: The program's in-scope domain patterns.
+
+    Returns:
+        `True` if `dst_host` is an interactsh subdomain, a known cloud
+        metadata hostname, resolves to the metadata IP, or is in scope
+        (via `_is_scope_allowed`'s wildcard matching). `False` (fail
+        closed) if `dst_host` is `None`.
+    """
+    if dst_host is None:
+        return False
+    return (
+        dst_host.endswith(INTERACTSH_SUFFIX)
+        or dst_host in METADATA_HOSTS
+        or dst_ip == METADATA_IP
+        or _is_scope_allowed(dst_host, scope_domains)
+    )
 
 
 def load_scope_domains_for_enforcement(scope_yaml_path: Path) -> list[str]:

@@ -5,12 +5,15 @@ Blueprint: bb_agent_v6.6_final_blueprint.md
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from core.ontology.enums import EvidenceType
 from core.ontology.findings import (
     Evidence,
     EvidenceChain,
+    ExploitCandidate,
     Finding,
     Reviewability,
     TriageResult,
@@ -299,3 +302,133 @@ class TestFindingIsReportable:
         evidence = Evidence(evidence_chain=chain, exploit_executed=True, exploit_safe=True, verified=True)
         assert evidence.exploit_executed is True
         assert EvidenceType.DOM_EXECUTION_CONFIRMED not in evidence.evidence_chain.unique_collected_types
+
+
+class TestExploitCandidate:
+    """docs/DECISIONS.md item 69."""
+
+    def _candidate(self, **overrides):
+        defaults = dict(
+            vuln_type="xss",
+            endpoint="/search",
+            http_method="GET",
+            parameter="q",
+            detected_by="xss_scanner",
+        )
+        defaults.update(overrides)
+        return ExploitCandidate(**defaults)
+
+    def test_required_fields_construct_with_no_defaults_needed(self):
+        c = self._candidate()
+        assert (c.vuln_type, c.endpoint, c.http_method, c.parameter, c.detected_by) == (
+            "xss",
+            "/search",
+            "GET",
+            "q",
+            "xss_scanner",
+        )
+
+    @pytest.mark.parametrize("vuln_type", ["cors", "host_header", "csrf", "auth"])
+    def test_parameter_accepts_none_for_the_four_no_single_parameter_vuln_types(self, vuln_type):
+        """Section 6.9's DEDUP_KEY; the four cases confirmed in
+        docs/DECISIONS.md item 69: CORS (Origin header), Host Header
+        (Host header), CSRF (whole-form action), Auth (state-machine
+        test name) have no single query/body parameter."""
+        c = self._candidate(vuln_type=vuln_type, parameter=None)
+        assert c.parameter is None
+
+    def test_parameter_is_required_not_defaulted(self):
+        """Unlike payload_used/raw_response_snapshot/probe_correlation_id
+        below, `parameter` has no default -- callers must explicitly
+        pass a value or explicit None, never omit it (class docstring)."""
+        with pytest.raises(TypeError):
+            ExploitCandidate(vuln_type="xss", endpoint="/search", http_method="GET", detected_by="xss_scanner")
+
+    def test_detected_at_defaults_to_now_utc(self):
+        before = datetime.now(timezone.utc)
+        c = self._candidate()
+        after = datetime.now(timezone.utc)
+        assert before <= c.detected_at <= after
+        assert c.detected_at.tzinfo is not None  # timezone-aware, not naive
+
+    def test_detected_at_is_overridable_for_deterministic_tests(self):
+        fixed = datetime(2026, 8, 15, 12, 0, 0, tzinfo=timezone.utc)
+        c = self._candidate(detected_at=fixed)
+        assert c.detected_at == fixed
+
+    def test_batch_1_optional_fields_default_to_none(self):
+        """docs/DECISIONS.md item 69: payload_used/raw_response_snapshot/
+        probe_correlation_id are Batch 1's hypothesis, not required by
+        every vuln_type (e.g. probe_correlation_id is None for all of
+        Batch 1, which has no OOB-based detection)."""
+        c = self._candidate()
+        assert (c.payload_used, c.raw_response_snapshot, c.probe_correlation_id) == (None, None, None)
+
+    def test_batch_1_optional_fields_can_be_set(self):
+        c = self._candidate(
+            vuln_type="sqli",
+            payload_used="' OR 1=1--",
+            raw_response_snapshot="HTTP/1.1 200 OK...",
+            probe_correlation_id=None,
+        )
+        assert c.payload_used == "' OR 1=1--"
+        assert c.raw_response_snapshot == "HTTP/1.1 200 OK..."
+
+    def test_probe_correlation_id_set_for_oob_style_detection(self):
+        """Batch 2 preview (CMDi/XXE/Deserialization/SSRF/Host Header) --
+        not this bundle's scope to build the scanners, but the field
+        must actually hold an interactsh-style correlation ID (Section
+        4.2) when a caller supplies one."""
+        c = self._candidate(vuln_type="cmd_injection", parameter="cmd", probe_correlation_id="XBOW_sess123_ab12")
+        assert c.probe_correlation_id == "XBOW_sess123_ab12"
+
+    def test_equality_is_by_value_when_detected_at_matches(self):
+        """Dataclass default __eq__ -- pinning this since detected_at's
+        default_factory would otherwise make two "identical" candidates
+        compare unequal by construction-time timestamp alone."""
+        fixed = datetime(2026, 8, 15, 12, 0, 0, tzinfo=timezone.utc)
+        c1 = self._candidate(detected_at=fixed)
+        c2 = self._candidate(detected_at=fixed)
+        assert c1 == c2
+        assert c1 is not c2
+
+    def test_two_candidates_constructed_separately_have_distinct_detected_at_by_default(self):
+        """The inverse of the above -- confirms detected_at's
+        default_factory actually re-evaluates per instance rather than
+        sharing one frozen default (the classic mutable-default-argument
+        class of bug, guarded against here the way this file already
+        expects EvidenceChain's own field(default_factory=list) to
+        behave)."""
+        c1 = self._candidate()
+        import time
+
+        time.sleep(0.001)
+        c2 = self._candidate()
+        assert c1.detected_at != c2.detected_at
+
+    def test_survives_a_dict_round_trip_via_isoformat(self):
+        """Lightweight round-trip check (Engineering Constitution:
+        "Every ontology dataclass/enum change gets a serialization
+        round-trip test... this project already had a graph-
+        serialization bug in a prior version"). No dedicated
+        serialize_exploit_candidate()/deserialize_exploit_candidate()
+        exists yet (out of this bundle's scope -- nothing persists an
+        ExploitCandidate to PostgreSQL/JSON this week) -- this test
+        instead pins that `dataclasses.asdict()` plus the same
+        isoformat()/fromisoformat() convention Section 11.3 already
+        established for BeliefGraph's own datetime fields round-trips
+        cleanly, so a future real serializer has a confirmed-safe
+        pattern to build on rather than discovering datetime handling
+        issues then."""
+        import dataclasses
+
+        fixed = datetime(2026, 8, 15, 12, 0, 0, tzinfo=timezone.utc)
+        c = self._candidate(detected_at=fixed, payload_used="<script>alert(1)</script>")
+        as_dict = dataclasses.asdict(c)
+        as_dict["detected_at"] = as_dict["detected_at"].isoformat()
+
+        restored_dict = dict(as_dict)
+        restored_dict["detected_at"] = datetime.fromisoformat(restored_dict["detected_at"])
+        restored = ExploitCandidate(**restored_dict)
+
+        assert restored == c

@@ -2776,3 +2776,320 @@ entry's commit.
 `core/mental_model/_injection_guard.py` (docstring only — caller list
 six → seven).
 
+## 69. `ExploitCandidate` built in `findings.py` — item 53's PROVISIONAL marking resolved to final
+
+Week 7 (week7_kickoff.md Phase 0 item 3) is the forcing function items 10
+and 53 both anticipated. Resolved in two parts, per the pre-investigation
+report reviewed and approved before this bundle was built.
+
+**File ownership: `findings.py`, confirmed final, not re-opened as
+provisional.** Item 53's own textual argument stands unchanged. Reviewer's
+additional reasoning, on the record: `ExploitCandidate` reads into
+`Finding` downstream, so one file avoids cross-file coupling between two
+types in the same maturation pipeline; and shape-wise, `ExploitCandidate`
+(per-vulnerability-instance) is closer to `Finding` (also per-instance)
+than to `EndpointSignals` (`core/ontology/surface.py`, item 70 below — a
+per-endpoint aggregate). Item 53's Fast-Lane-thematic counter-argument is
+explicitly **not rebutted** by this reasoning — recorded as real and
+unaddressed, same as item 53 itself recorded it, per the reviewer's
+explicit instruction to log it as such rather than silently drop it.
+
+**Fields, four provenances** (full reasoning and citations on each
+attribute: `core/ontology/findings.py`'s `ExploitCandidate` docstring):
+`vuln_type`/`endpoint` (Section 8.1's flow, matching `Finding`'s own
+convention), `http_method`/`parameter` (Section 6.9's `DEDUP_KEY`,
+`parameter` nullable for CORS/Host Header/CSRF/Auth's no-single-parameter
+cases); `detected_by`/`detected_at` (authored, unblocking Section 7.29's
+`cross_scanner` definition and Section 11.2's pruning windows
+respectively); `payload_used`/`raw_response_snapshot`/`probe_correlation_id`
+(authored, **Batch 1 scope only** — confirmed sufficient for
+xss/sqli/ssti/lfi/path_traversal, explicitly **not** confirmed for Batches
+2-7; Race's `success_count`/`total` (Section 7.5) is already flagged as a
+concrete case these three fields cannot express).
+
+**Rejected outright, not a close call:** a `raw_signal: dict[str, Any]`
+catch-all field, considered during pre-investigation as the alternative
+to the three typed fields above. This is exactly the pattern the
+Engineering Constitution's ontology-first rule ("never duck-types a dict
+instead") exists to forbid. `core/ontology/surface.py`'s `EndpointSignals.
+signal_counts: dict[str, int]` (item 70) is not the same pattern and is
+not affected by this rejection — a concretely-typed counter mapping is a
+different kind of thing than an untyped catch-all; that distinction is
+recorded explicitly in `surface.py`'s own docstring so the two are not
+conflated later.
+
+**Standing instruction for Batches 2-7:** the first later-batch scanner
+whose detection signal these three fields cannot express stops and flags
+it back, rather than silently adding a field or reaching for a dict.
+
+**Verification:** `python3 -m pytest tests/core/ontology/test_findings.py
+-k ExploitCandidate` — 14/14 passed, including a construction-defaults
+check, all four no-single-parameter vuln_types, `detected_at`'s
+default-vs-overridable behavior, both true independently, and a
+dict/JSON round-trip (Engineering Constitution's serialization-round-trip
+requirement — no dedicated serializer exists yet for this type, so this
+pins that the `isoformat()`/`fromisoformat()` convention Section 11.3
+already established for BeliefGraph's own datetime fields round-trips
+cleanly here too, for whenever a real one is built). Full suite re-run
+clean after this entry (see item 73's summary for the cumulative count).
+
+**Files this entry covers:** `core/ontology/findings.py` (`ExploitCandidate`
+added; header docstring updated),
+`tests/core/ontology/test_findings.py` (`TestExploitCandidate` added, 14
+tests).
+
+## 70. `EndpointSignals` built in new `core/ontology/surface.py` — scoped to one of four named types
+
+Resolves week7_kickoff.md Phase 0 item 4. `SurfaceData`/`AttackEdge`/
+`AttackGraph` — the other three types Section 3 names in the same file
+comment — are **not** built by this entry and remain exactly as
+PROVISIONAL as items 10/53/63 already left them.
+
+**Why `EndpointSignals` and not the other three:** it has an
+already-cited, already-real consumer that predates this week —
+`Finding.reviewability.passes_signal_gate`'s own Week 1 docstring
+(`core/ontology/findings.py`) and `core/verifier/deterministic_verifier.py`'s
+Week 1 header both say `passes_signal_gate` is "set during Fast Lane from
+the EndpointSignals check." That dependency existed on paper with nothing
+behind it until a real Fast Lane scanner batch could exercise it. The
+other three types have no equivalent already-cited consumer:
+`core/chain/chain_engine.py` was deliberately built against its own
+internal graph rather than `AttackGraph` (item 63), and no scanner
+workflow in Section 7.1-7.29 describes writing to any of the other three.
+
+**No field-level spec exists for `EndpointSignals` anywhere in the
+blueprint** (grep-confirmed against all 16 sections) — a strictly worse
+starting position than `ExploitCandidate` had (item 53, at least backed by
+a flow-diagram mention and a usage example). Kept deliberately minimal:
+`endpoint: str`, `signal_counts: dict[str, int]` (vuln_type → raw Fast
+Lane hit count at that endpoint) — exactly enough to make
+`passes_signal_gate` eventually computable, nothing speculative beyond
+it.
+
+**Deliberately holds no `passes_signal_gate`-computing method of its
+own.** The real threshold already exists and is already cited —
+`core.verifier.evidence_chain.VulnThresholds.min_signals_for(vuln_type)`
+(Section 5.4's `min_signals`, e.g. Section 7.1: "Signal min: 4" for XSS —
+the Fast-Lane-level pre-filter, distinct from and upstream of
+`min_evidence_types`'s Verification-layer gate) — but `VulnThresholds`
+lives in `core/verifier/`, and giving `EndpointSignals` a method that
+compares against it would invert the dependency direction item 13 already
+ruled out for `compute_triage_score` ("verifier depends on ontology,
+never the reverse"). The actual comparison is Fast Lane orchestration's
+job, itself unbuilt this week — same status as the orchestration that
+would call `record_fast_lane_signal` (item 72).
+
+**Verification:** `python3 -m pytest tests/core/ontology/test_surface.py`
+— 8/8 passed, including a mutable-default-dict isolation check (two
+instances don't share one `dict`), a pin that `passes_signal_gate` does
+NOT exist as a method/property (so a future addition is a conscious
+decision, not an accident), a field-set pin (exactly `endpoint` +
+`signal_counts`, nothing more), and a JSON round-trip.
+
+**Files this entry covers:** `core/ontology/surface.py` (new),
+`tests/core/ontology/test_surface.py` (new, 8 tests).
+
+## 71. `is_allowed_outbound` consolidated into `scope_enforcer.py`; `safety_guard.py` refactored to import it
+
+Resolves week7_kickoff.md Phase 0 item 6. Reverses the specific "stays
+sandbox-local" call item 66 made — not silently, and not because item 66
+was wrong for what it decided at the time (nothing built yet needed the
+Python-HTTP-layer side of this policy); reversed now because that premise
+changed: Week 7's CMDi/XXE/Deserialization/SSRF scanners (Batch 2, not yet
+built this bundle, but the reason this consolidation matters now rather
+than later) need the identical interactsh+metadata+scope policy through
+`RateLimitedClient`, not the sandbox's locally-scoped copy.
+
+**No architectural barrier exists to `core/sandbox` importing from
+`core/governance`, confirmed before this refactor, not assumed:**
+`safety_guard.py` already imported `_is_scope_allowed` from
+`scope_enforcer.py` (line 106, since item 66) before this entry — a
+second, larger import from the same module changes nothing about that
+existing direction. Item 66's own "this file makes its own decision, at
+its own point in the code" language was about the ENFORCEMENT CALL SITE
+staying independent per Section 10.2's four-layer framing, never a claim
+that the function DEFINITION had to be duplicated. The two copies had
+already started drifting in signature before this entry (this note's own
+prior text quoted `set[str]`/bare `str` for `scope_domains`/`dst_host`,
+paraphrasing Section 4.4; `safety_guard.py`'s real implementation already
+used `list[str]` and added `dst_host is None` fail-closed handling neither
+Section 4.4's literal snippet nor this note's own quote of it showed) —
+concrete evidence the duplication was a real, not just theoretical,
+maintenance burden.
+
+**What moved:** `is_allowed_outbound` plus its three constants
+(`INTERACTSH_SUFFIX`, `METADATA_HOSTS`, `METADATA_IP`) — `scope_enforcer.py`
+is now their one definition; `safety_guard.py` imports all four instead of
+defining its own. `check_outbound`/`_augmented_scope_domains`/
+`_resolve_ip`/`build_call_target` — all `safety_guard.py`-specific
+orchestration around the moved function, not part of Section 4.4's core
+policy itself — stayed exactly where they were; only the shared policy
+function and its constants relocated.
+
+**Behavioral equivalence, proven, not assumed:** `tests/core/sandbox/
+test_safety_guard.py`'s existing 25 tests run unmodified before and after
+the refactor — same 25 test names, same order, all passing both times.
+Not just "the suite still passes" (the reviewer's own explicit bar) —
+confirmed identical pass/fail per test.
+
+**Verification:** `python3 -m pytest tests/core/sandbox/test_safety_guard.py`
+— 25/25 (unchanged). `python3 -m pytest tests/core/governance/test_scope_enforcer.py
+-k IsAllowedOutbound` — 12/12 new, direct tests at the function's new
+canonical home (not relying solely on `safety_guard.py`'s tests exercising
+it via import) — includes a behavioral proof that the "scope" branch
+really does call the module's own `_is_scope_allowed` rather than a
+re-derived copy.
+
+**Files this entry covers:** `core/governance/scope_enforcer.py`
+(`is_allowed_outbound` + 3 constants added; header docstring updated),
+`core/sandbox/safety_guard.py` (local `is_allowed_outbound` + constants
+removed, now imported; header docstring updated),
+`tests/core/governance/test_scope_enforcer.py` (`TestIsAllowedOutbound`
+added, 12 tests). `tests/core/sandbox/test_safety_guard.py` unmodified
+(25 tests, all still passing, confirmed before and after).
+
+## 72. `record_fast_lane_signal` built in `hypothesis_engine.py` — Fast Lane's entry point into the BeliefGraph
+
+Resolves week7_kickoff.md Phase 0 items 5 and 7 together (the reviewer's
+own framing: item 7 is "answered by item 5's design").
+
+**Wraps `seed_hypothesis`, not a new path into `add_belief_node`:**
+inherits the existing capacity guard (item 68) for free. `hypothesis_engine.py`'s
+own prior docstring flagged an alternative — centralizing enforcement
+inside `add_belief_node` itself — as "architecturally preferable" but
+left it for whenever `belief_manager.py` was next legitimately reopened;
+this entry takes the other branch instead, per the reviewer's explicit
+instruction, and `add_belief_node` remains exactly as unguarded as that
+prior note described. Confirmed by test: `TestRecordFastLaneSignal::
+test_capacity_guard_is_inherited_from_seed_hypothesis` mirrors
+`TestSeedHypothesisCapacityGuard::test_full_after_prune_raises` exactly,
+substituting the new function for the final call.
+
+**Flat kwargs, not a single `ExploitCandidate` parameter — deliberate,
+not deferred by omission:** `ExploitCandidate` (item 69) exists as of
+this same bundle, but per the reviewer's explicit instruction this
+function is not refactored to take one directly yet. Prove the flat
+version against Batch 1's real scanners first, then collapse to
+`ExploitCandidate` once actually exercised. The resulting overlap is
+deliberate: an `ExploitCandidate` carries fields (`http_method`,
+`parameter`, `detected_by`, etc.) this function's signature has no
+parameter for at all — callers pass only the `seed_hypothesis` subset,
+and are expected to separately retain their own `ExploitCandidate` for
+whatever else consumes it.
+
+**`tech_risk`/`dynamism`: true no-ops, per week7_kickoff.md Phase 0 item
+5's own explicit instruction** ("design its signature to accept future
+optional fields ... even though you are NOT implementing what populates
+them this week"). Accepted, discarded — not logged, not validated, not
+threaded into `seed_hypothesis` or `add_belief_node`. Proven by test, not
+just asserted: `test_tech_risk_and_dynamism_are_true_no_ops` confirms
+passing any combination (including explicit `None`) produces a
+byte-for-byte identical resulting node to not passing them at all, and
+that neither key ever appears as a node attribute.
+
+**`starting_weight` is this function's parameter, not its lookup:** the
+caller (Fast Lane orchestration, not yet built) resolves it from
+`vuln_weights.yaml`'s per-vuln_type `starting_weights` (Section 9.5)
+before calling. No file I/O in this function, matching the precedent
+`EvidenceChain.min_required`'s own resolution-outside-the-dataclass
+pattern already established (`core/verifier/evidence_chain.py`).
+
+**File placement: `hypothesis_engine.py`, the reviewer's own call
+(build order: "your call on file location if it's not obvious").**
+Reasoning: `record_fast_lane_signal` calls `seed_hypothesis`, the same
+"LLM-candidate → canonical-state chokepoint" this module's own docstring
+already claims; a Fast-Lane-sourced candidate reaching the same
+chokepoint through the same-layer function, not a level below it in
+`belief_manager.py`, keeps the layering this module's docstring already
+describes (`hypothesis_engine.py` = validated business logic;
+`belief_manager.py` = raw graph mechanics) consistent rather than mixing
+them.
+
+**Verification:** `python3 -m pytest tests/core/planning/test_hypothesis_engine.py
+-k RecordFastLaneSignal` — 9/9 passed. `tests/core/planning/
+test_hypothesis_tree.py` (19) and the rest of `test_hypothesis_engine.py`
+(31 pre-existing) re-run clean, confirming no regression to the module
+this entry extends. `belief_manager.py` untouched — confirmed by `git
+diff` showing zero changes to that file in this entry's commit.
+
+**Files this entry covers:** `core/planning/hypothesis_engine.py`
+(`record_fast_lane_signal` added; header docstring updated),
+`tests/core/planning/test_hypothesis_engine.py` (`TestRecordFastLaneSignal`
+added, 9 tests).
+
+## 73. `base_scanner.py`'s `scan()` settled: `async def scan(self, target_url: str) -> list[ExploitCandidate]`, now `@abstractmethod`
+
+The zeroth, cross-cutting prerequisite the pre-investigation report
+flagged before any of the 29 scanners could be batched — not part of any
+individual batch's count. Unblocked by item 69: this file's own prior
+docstring named `ExploitCandidate`'s field list as exactly what was
+missing to settle this signature.
+
+**Signature reasoning:** `target_url: str` — the single, minimal input
+every workflow in Section 7.1-7.29 actually describes testing (one
+endpoint at a time; one `scan()` call may still produce zero, one, or
+many `ExploitCandidate`s, e.g. one per parameter or payload variant tried
+against that URL). Deliberately not `EndpointSignals`, `SurfaceData`, or
+any richer object — `SurfaceData` stays exactly as PROVISIONAL as item 70
+left it, and `EndpointSignals` (item 70) is an aggregate scanners
+contribute readings TO, not an input they read FROM. `async def`, not a
+plain `def`: `RateLimitedClient.request` is itself `async def` (confirmed
+by direct read before this signature was chosen), so a synchronous
+`scan()` could not call it. Return type is `list[ExploitCandidate]`, per
+the build order's explicit instruction; an empty list, not `None`,
+represents "nothing found," matching `lfi_scanner.py`'s own Section 7.10
+wording ("returns 0 ExploitCandidates," not "returns None").
+
+**`@abstractmethod` added — a real behavioral change, not just a type
+annotation:** Week 5's version used `ABC` without one, since nothing
+existed yet to force subclasses to implement. `scan()` is that thing now;
+a subclass missing it cannot be instantiated at all, enforced by Python's
+ABC machinery at class-definition/instantiation time. This broke two
+existing test fixtures that predated `scan()` — caught by the full suite,
+not missed: `tests/core/scanners/test_base_scanner.py`'s and
+`tests/core/scanners/test_registry.py`'s dummy scanner subclasses
+(`_ConcreteScanner`, `_DummyScannerA`, `_DummyScannerB`) previously
+declared with `pass` bodies, now each given a minimal real `scan()`
+returning `[]`. Two of `test_base_scanner.py`'s existing tests had their
+own premises invalidated by design, not by accident, and were updated as
+the conscious decision their own docstrings anticipated (`test_deliberately_
+has_no_scan_or_execute_method`'s docstring, verbatim: "If this test ever
+needs updating, that update should be a conscious, documented decision...
+not an incidental side effect") — replaced with tests pinning the new,
+opposite facts (`scan()` IS present and abstract; a subclass without it
+IS rejected).
+
+**A transcription bug in this same entry's first draft, caught before
+commit, not after:** an intermediate `str_replace` step accidentally
+deleted the literal text `def generate_alternative(` while inserting
+`record_fast_lane_signal` immediately above it (item 72), leaving that
+function's parameter list orphaned without its own `def` line —
+`python3 -c "import core.planning.hypothesis_engine"` raised
+`SyntaxError: unmatched ')'` immediately, before any test ran. Fixed by
+restoring the missing `def generate_alternative(` line; re-verified by
+constructing a graph through both `record_fast_lane_signal` and
+`generate_alternative` in the same session and by re-running
+`tests/core/planning/test_hypothesis_engine.py`'s full 40 tests clean.
+Logged here rather than silently fixed and left unmentioned, per this
+project's own standing practice for every prior self-caught bug (Weeks
+4-6's rounding-semantics, depth-tracking, and `multiprocessing.Queue`
+bugs) — caught by this session's own tooling before delivery, not by
+Waild's independent review.
+
+**Verification:** `python3 -m pytest tests/core/scanners/test_base_scanner.py
+tests/core/scanners/test_registry.py` — all passing (7 + existing
+`test_registry.py` tests, no regressions). Full suite: 965/965 (920
+baseline + 14 item 69 + 8 item 70 + 12 item 71 + 9 item 72 + 2 net item
+73 — `test_base_scanner.py` went from 5 tests to 7: two replaced
+one-for-one in kind but the replacement set is larger, plus three wholly
+new tests, minus the two retired). `make ci-scanner-http-check` and
+`make ci-scope-diff` both re-run clean — no scanner code and no Go code
+touched this bundle. Go suite unaffected: 32/32 (16 + 16), re-run to
+confirm, not assumed from a prior session.
+
+**Files this entry covers:** `core/scanners/base_scanner.py` (`scan()`
+added as `@abstractmethod`; header docstring updated),
+`tests/core/scanners/test_base_scanner.py` (three tests updated/replaced,
+one new, net 5→7),
+`tests/core/scanners/test_registry.py` (`_DummyScannerA`/`_DummyScannerB`
+given minimal `scan()` implementations; no test bodies changed).

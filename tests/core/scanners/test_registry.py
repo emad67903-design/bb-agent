@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 import core.scanners.registry as registry_module
+from core.ontology.findings import ExploitCandidate
 from core.scanners.base_scanner import BaseScanner
 from core.scanners.registry import (
     ScannerAlreadyRegistered,
@@ -31,11 +32,20 @@ def isolated_registry():
 
 
 class _DummyScannerA(BaseScanner):
-    pass
+    """Minimal real `scan()` (docs/DECISIONS.md item 73) -- this file's
+    tests only care about registry/instantiation mechanics, not
+    scanner-specific detection logic, so an empty result is sufficient
+    and keeps every existing test below unchanged."""
+
+    async def scan(self, target_url: str) -> list[ExploitCandidate]:
+        return []
 
 
 class _DummyScannerB(BaseScanner):
-    pass
+    """See `_DummyScannerA`."""
+
+    async def scan(self, target_url: str) -> list[ExploitCandidate]:
+        return []
 
 
 class TestRegister:
