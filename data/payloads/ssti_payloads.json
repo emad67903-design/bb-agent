@@ -2,6 +2,12 @@
   "_file_type": "injectable_payload",
   "_scanner": "ssti_scanner",
   "_notes": "Jinja2/Twig/Freemarker/etc.",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside ssti_scanner",
-  "payloads": []
+  "_status": "Real payloads added Week 7 (docs/DECISIONS.md item 77). Schema: id, engine, payload, expected -- see ssti_scanner.py. Only jinja2_multiply and twig_multiply are directly blueprint-cited (Section 7.7's exact text: '{{7*7}} -> 49 (Jinja2). {7*7} -> 49 (Twig variants)'); the other three engines are authored additions (Section 3.1 names them only as 'etc.', no exact syntax given) using each engine's well-established real-world SSTI test expression.",
+  "payloads": [
+    {"id": "jinja2_multiply", "engine": "jinja2", "payload": "{{7*7}}", "expected": "49"},
+    {"id": "twig_multiply", "engine": "twig", "payload": "{7*7}", "expected": "49"},
+    {"id": "freemarker_multiply", "engine": "freemarker", "payload": "${7*7}", "expected": "49"},
+    {"id": "smarty_multiply", "engine": "smarty", "payload": "{7*7}", "expected": "49"},
+    {"id": "velocity_multiply", "engine": "velocity", "payload": "#set($x=7*7)$x", "expected": "49"}
+  ]
 }

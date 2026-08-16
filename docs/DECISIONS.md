@@ -3093,3 +3093,290 @@ added as `@abstractmethod`; header docstring updated),
 one new, net 5→7),
 `tests/core/scanners/test_registry.py` (`_DummyScannerA`/`_DummyScannerB`
 given minimal `scan()` implementations; no test bodies changed).
+## 74. `core/scanners/param_injection.py` built — shared query-parameter substitution, authored addition
+
+Not a blueprint-named file. Every Batch 1 workflow (Sections 7.1, 7.2,
+7.7, 7.10, 7.18) tests by substituting a payload into an existing query
+parameter's value — the "same kind of thing, many times" case the
+Engineering Constitution says to share rather than let five scanners
+each hand-roll their own URL-manipulation logic.
+
+**Scope, deliberately narrow:** GET query parameters only. `BaseScanner.
+scan(self, target_url: str)` (item 73) has no body, header dict, or path
+segments to inject into — there is nothing else for this batch's
+scanners to test with the input they're given. Flagged explicitly, not
+silently limited: POST-body parameters, headers, and path-segment
+traversal are real attack surface this batch does not cover.
+`iter_query_param_injections(target_url, payload)` substitutes into one
+parameter at a time, leaving every other parameter unchanged, and
+returns `[]` if `target_url` has no query string at all.
+
+**`InjectionPoint.parameter` is where `ExploitCandidate.parameter`'s
+real value comes from for every Batch 1 scanner** — Section 6.9's
+`DEDUP_KEY` convention (item 69), traced back to its actual source.
+
+**Verification:** `python3 -m pytest tests/core/scanners/test_param_injection.py`
+— 7/7, including special-character payload round-tripping and blank-vs-
+absent parameter distinction.
+
+**Files this entry covers:** `core/scanners/param_injection.py` (new),
+`tests/core/scanners/test_param_injection.py` (new, 7 tests).
+
+## 75. `xss_scanner.py` built — reflection detection, Section 7.1
+
+**Scope: unescaped-reflection detection only, not DOM execution.**
+Section 7.1's minimum-meeting evidence (`replay_stable` + `differential`
++ `variant_confirmed` = 3) requires none of Playwright's console-capture
+proof; `dom_execution_confirmed` is an explicit optional 4th type, and
+`core/verifier/xss_verifier.py` does not exist yet (grep-confirmed) —
+consistent with that being a separate, not-yet-built pipeline stage. DOM
+sinks (`innerHTML`, `document.write`, `eval`) are NOT tested — an
+HTTP-only scanner cannot observe client-side-JS-mediated behavior;
+flagged as a real gap, not silently dropped.
+
+**Markers are random per-probe, not the blueprint's literal
+`XBOW_XSS_12345`:** a fixed literal would let one page's cached content
+falsely "confirm" an unrelated probe. Section 4.2's `InteractshClient`
+already establishes this codebase's randomized-suffix-marker convention.
+
+**`xss_payloads.json` populated** — 6 payloads across 3 contexts
+(html_body, html_attribute, js_string), replacing the Week 0 stub.
+`payload_inventory.py` re-run clean against the populated file.
+
+**Verification:** `python3 -m pytest tests/core/scanners/test_xss_scanner.py`
+— 13/13, including out-of-scope-raises (scope enforcement is
+`RateLimitedClient`'s job, not swallowed here) and 512-char snapshot
+truncation.
+
+**Files this entry covers:** `core/scanners/xss_scanner.py` (new),
+`data/payloads/xss_payloads.json` (real content, was Week 0 stub),
+`tests/core/scanners/test_xss_scanner.py` (new, 13 tests).
+
+## 76. `sqli_scanner.py` built — four techniques, Section 7.2
+
+**Scope: cheap single-pass Fast Lane signals, not the full verification
+algorithm.** Section 7.2's boolean-blind detail (5 requests per arm,
+Section 5.2's precise stability+non-overlap rule) and its time-based
+2.5σ statistical baseline are both `sqli_verifier.py`'s job — a file
+that does not exist yet (grep-confirmed), same scope boundary item 75
+already drew for `xss_verifier.py`. This scanner does ONE request per
+error/union probe, ONE baseline + ONE probe per time check, and ONE
+true/false pair (not five) per boolean check.
+
+**Four techniques, four payload shapes**, documented in full in
+`sqli_scanner.py`'s own module docstring: `error` (no marker, checks
+`DB_ERROR_SIGNATURES` — authored, representative not exhaustive, same
+transparency as any authored signature list in this codebase), `union`
+(Section 7.2's own example, random marker per probe), `time` (`{
+payload_template, sleep_seconds}`, one baseline fetch per `scan()` call
+not per payload, `TIME_THRESHOLD_SLACK_SECONDS = 1.0` fixed buffer —
+authored, not cited), `boolean` (paired via `pair_id`/`boolean_role`,
+coarse single-pair status-code-or-length differential, deliberately NOT
+Section 5.2's 5-per-arm rule).
+
+**Self-caught bug, fixed pre-delivery:** `_scan_time`'s first draft fired
+an unconditional baseline request even when `target_url` had no query
+parameters to test at all — inconsistent with every other technique's
+"no params, no requests" behavior. Caught by writing
+`test_no_query_params_makes_no_requests_at_all` before considering the
+technique done, not by the reviewer. Fixed by checking for at least one
+injection point before the baseline fetch.
+
+**`time_fn` is constructor-injectable**, matching `RateLimiter`'s
+established pattern (`core/http/rate_limited_client.py`) — no test waits
+on a real `SLEEP(5)`.
+
+**`sqli_payloads.json` populated** — 8 payloads across all 4 techniques.
+
+**Verification:** `python3 -m pytest tests/core/scanners/test_sqli_scanner.py`
+— 22/22, including the no-query-params regression test, an
+incomplete-boolean-pair-is-skipped-not-an-error case, and a test
+confirming every one of `DB_ERROR_SIGNATURES`' entries individually
+detects.
+
+**Files this entry covers:** `core/scanners/sqli_scanner.py` (new),
+`data/payloads/sqli_payloads.json` (real content, was Week 0 stub),
+`tests/core/scanners/test_sqli_scanner.py` (new, 22 tests).
+
+## 77. `ssti_scanner.py` built — baseline-differential expression evaluation, Section 7.7
+
+**Scope matches Section 7.7 exactly, no verifier deferred to:** unlike
+XSS/SQLi, Section 7.7 names no separate confirmation step — "Safe
+exploit: Expression evaluation only... Engine fingerprint = proof." This
+scanner's detection IS the safe exploit.
+
+**Baseline comparison is required, unlike XSS/union-SQLi's marker
+check:** `expected` values ("49") are short and plausible, not random
+per-probe markers — a page already containing "49" for unrelated reasons
+would otherwise false-positive. One baseline fetched once per `scan()`
+call (same optimization as item 76's `time` technique, same reasoning:
+baseline content doesn't depend on which payload is about to be tried).
+An engine whose `expected` value already appears in the baseline is
+skipped for that engine, not flagged.
+
+**`ssti_payloads.json` populated** — 5 engines. Only `jinja2` (`{{7*7}}`)
+and `twig` (`{7*7}`) are directly blueprint-cited (Section 7.7's exact
+text); `freemarker`/`smarty`/`velocity` are authored additions using
+each engine's well-established real-world SSTI test expression — Section
+3.1 names them only as "etc.," no exact syntax given. Flagged in the
+payload file's own `_status` note, not silently presented as equally
+cited.
+
+**Self-caught transcription error, fixed pre-delivery:** the Twig
+payload's first draft used `{{7*'7'}}` (double braces, string coercion)
+— Section 7.7's actual text is `{7*7}` (single braces). Caught while
+re-reading the section to write the payload file's `_status` note, fixed
+before any test was written against it.
+
+**Verification:** `python3 -m pytest tests/core/scanners/test_ssti_scanner.py`
+— 11/11, including a dedicated test that jinja2/twig's payload+expected
+values match Section 7.7's text verbatim, and the false-positive-guard
+case (expected value present in baseline too).
+
+**Files this entry covers:** `core/scanners/ssti_scanner.py` (new),
+`data/payloads/ssti_payloads.json` (real content, was Week 0 stub),
+`tests/core/scanners/test_ssti_scanner.py` (new, 11 tests).
+
+## 78. `lfi_scanner.py` built — Windows-fingerprint deferral + shared hostname heuristic, Section 7.10
+
+**Two-phase design, per Section 3's own `lfi_scanner.py` comment
+verbatim:** Windows fingerprint check first (via the baseline fetch
+already needed for the content heuristic — no extra request spent purely
+on fingerprinting), `[LFI_WINDOWS_DEFERRED]` logged and `[]` returned on
+match; Linux-only `/etc/hostname` testing across the 3 payload-file
+encodings otherwise. `WINDOWS_FINGERPRINT_HEADERS`
+(`Server: *iis*`/`X-Powered-By: asp.net`/`X-AspNet-Version` presence) is
+authored — Section 7.10 names the signal category, not exact header
+values, same transparency as item 76's `DB_ERROR_SIGNATURES`.
+
+**`core/scanners/content_heuristics.py` built** — new, authored, not
+blueprint-named (same disclosure as item 74's `param_injection.py`).
+Holds `looks_like_hostname_content` (three-part rule: differs from
+baseline, ≤253 chars per RFC 1035's total-length limit, matches RFC
+1035's character-class shape via a regex that also enforces the
+63-char-per-label limit) — shared with `path_traversal.py` (item 79) so
+both scanners' idea of "looks like `/etc/hostname`" agrees by
+construction. Explicitly documented as an approximation: no check here
+can prove the content IS `/etc/hostname` rather than some other short,
+differing, alphanumeric response — a real, inherent limit of black-box
+testing without a known-good baseline value.
+
+**Self-caught bugs in test authoring, fixed pre-delivery, both in
+`test_content_heuristics.py`:** (1) a boundary test asserted a single
+253-character label would pass the shape check — it doesn't, correctly,
+because RFC 1035 caps each dot-separated label at 63 characters; fixed
+by testing a real multi-label 253-char hostname instead. (2) the
+replacement test's own hand-counted label lengths didn't sum to 253 on
+the first attempt (251, not 253); fixed by computing the padding
+programmatically rather than hand-counting a second time. Neither bug
+reached the scanner's actual logic — both were test-construction errors,
+caught by the tests' own assertions failing loudly, not by inspection.
+
+**`lfi_payloads.json` populated** — the 3 encodings (raw, url_encoded,
+double_url_encoded) Section 7.10's "triple confirmation across 3
+distinct path encodings" names.
+
+**Verification:** `python3 -m pytest tests/core/scanners/test_lfi_scanner.py`
+— 16/16, including confirming the Windows-deferral path makes exactly
+one request (the baseline) and goes no further, and that the
+`[LFI_WINDOWS_DEFERRED]` marker is actually logged, not just implied.
+`python3 -m pytest tests/core/scanners/test_content_heuristics.py` —
+19/19 (11 hostname + 8 win.ini, the latter added in item 79 below but
+tested together in the one file).
+
+**Files this entry covers:** `core/scanners/lfi_scanner.py` (new),
+`core/scanners/content_heuristics.py` (new — `looks_like_hostname_content`
+half; `looks_like_win_ini_content` added in item 79),
+`data/payloads/lfi_payloads.json` (real content, was Week 0 stub),
+`tests/core/scanners/test_lfi_scanner.py` (new, 16 tests),
+`tests/core/scanners/test_content_heuristics.py` (new).
+
+## 79. `path_traversal.py` built — Linux + Windows, ZIP/API variants explicitly deferred, Section 7.18
+
+**Scope: Linux + Windows only.** Section 7.18 and Section 3's own file
+comment both name four categories ("Linux... Windows... ZIP and API
+variants" / "Windows + ZIP + API") but only the first two have a
+concrete pattern anywhere in the blueprint (grep-confirmed against all
+16 sections). ZIP-based and API-specific traversal are named as
+categories with no example payload, no target file, no detection rule
+given anywhere. Not invented: `path_traversal_payloads.json`'s own
+`_status` note states this explicitly, and
+`test_zip_and_api_variants_are_deliberately_absent` pins the gap as a
+conscious decision, the same pinning pattern item 73 established for
+`scan()`'s once-deliberate absence.
+
+**`looks_like_win_ini_content` added to `content_heuristics.py`**
+(alongside item 78's hostname check) — NOT a heuristic in the same sense:
+`win.ini`'s `[fonts]`/`[extensions]` section headers are fixed constants
+on every stock Windows install, so this is a reliable exact-substring
+match, not an approximation with documented limits the way the hostname
+check is.
+
+**No Windows-fingerprint gating here, unlike `lfi_scanner.py`:** Section
+7.10's fingerprint-then-defer instruction is explicitly `lfi_scanner.py`'s
+own behavior (Section 3's comment is on that file, not this one).
+Section 7.18 gives this scanner no equivalent skip instruction — it is
+the catch-all Section 3 already describes ("handles Windows LFI deferred
+from lfi_scanner.py"), so it tests both Linux and Windows payloads
+against every target regardless of fingerprint.
+
+**`path_traversal_payloads.json` populated** — 3 payloads: Linux
+`/etc/hostname` (matches Section 7.18's exact text) and 2 Windows
+`win.ini` variants (raw backslash, matching Section 7.18's exact text,
+plus a `%5c`-URL-encoded variant).
+
+**Verification:** `python3 -m pytest tests/core/scanners/test_path_traversal.py`
+— 13/13, including a test confirming both OS's payloads always fire (no
+fingerprint-based skip) and that all 3 real payloads independently
+detect against a target exposing both files.
+
+**Files this entry covers:** `core/scanners/path_traversal.py` (new),
+`core/scanners/content_heuristics.py` (`looks_like_win_ini_content`
+added — file created in item 78),
+`data/payloads/path_traversal_payloads.json` (real content, was Week 0
+stub), `tests/core/scanners/test_path_traversal.py` (new, 13 tests),
+`tests/core/scanners/test_content_heuristics.py` (win.ini test class
+added — file created in item 78).
+
+## 80. Batch 1 complete — all 5 scanners registered, full suite and both CI hooks re-verified together
+
+Closes out xss_scanner, sqli_scanner, ssti_scanner, lfi_scanner,
+path_traversal (items 75-79) as one integrated unit, per the
+Constitution's "run the full suite after every batch, not just the new
+scanner's own tests."
+
+**All 5 import and register together with zero `SCANNER_REGISTRY` key
+collisions**, confirmed by importing all five modules in one process and
+checking `SCANNER_REGISTRY` directly — `xss_scanner`, `sqli_scanner`,
+`ssti_scanner`, `lfi_scanner`, `path_traversal`, exactly 5 entries.
+
+**`payload_inventory.py` (Week 0) re-run against all 5 now-populated
+payload files** — clean, confirms the `_file_type` manifest check item
+76's file (and the other four) still satisfies, and that populating real
+content did not break the schema Week 0 validated.
+
+**Full suite: 1066/1066** (965 foundation-bundle baseline + 7 item 74 +
+13 item 75 + 22 item 76 + 11 item 77 + 16 + 19 items 78 (lfi_scanner +
+content_heuristics, hostname half) + 13 items 79 (path_traversal +
+content_heuristics, win.ini half) — the content_heuristics file's 19
+tests are counted once, split across items 78/79 by which half of the
+file each item added). Both CI hooks (`ci-scanner-http-check`,
+`ci-scope-diff`) green — no scanner file imports `httpx`/`requests`
+directly (all five route through `self.session`, `RateLimitedClient`,
+per the Constitution's "ONE HTTP LAYER, NO EXCEPTIONS" mandate), no Go
+file touched this batch. Go suite: 32/32, re-run not assumed.
+
+**Batch 1's own standing instruction (item 69), status at batch close:**
+none of the 5 scanners hit a detection signal `ExploitCandidate`'s three
+Batch-1 fields (`payload_used`, `raw_response_snapshot`,
+`probe_correlation_id`) couldn't express — the hypothesis held for this
+batch. Race's `success_count`/`total` remains the concretely-flagged case
+expected to break it, still untested (Batch 5, protocol-level).
+
+**Two authored-and-flagged coverage gaps carried forward, not silently
+closed:** XSS's DOM-sink testing (item 75) and path_traversal's ZIP/API
+variants (item 79) — both real, both documented at the point they were
+cut, neither blocking this batch's delivery.
+
+**Files this entry covers:** none new — summary/verification entry over
+items 74-79's files.

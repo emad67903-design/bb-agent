@@ -2,6 +2,37 @@
   "_file_type": "injectable_payload",
   "_scanner": "xss_scanner",
   "_notes": "HTML/attr/JS context/DOM probes",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside xss_scanner",
-  "payloads": []
+  "_status": "Real payloads added Week 7 (docs/DECISIONS.md item 75). Schema: id, context, payload_template ({marker} placeholder, resolved per-request to a unique XBOW_XSS_<hex> string before injection -- see xss_scanner.py).",
+  "payloads": [
+    {
+      "id": "html_body_img_onerror",
+      "context": "html_body",
+      "payload_template": "<img src=x onerror=console.log('{marker}')>"
+    },
+    {
+      "id": "html_body_svg_onload",
+      "context": "html_body",
+      "payload_template": "<svg onload=console.log('{marker}')>"
+    },
+    {
+      "id": "html_attribute_double_quote_breakout",
+      "context": "html_attribute",
+      "payload_template": "\"><img src=x onerror=console.log('{marker}')>"
+    },
+    {
+      "id": "html_attribute_single_quote_breakout",
+      "context": "html_attribute",
+      "payload_template": "'><img src=x onerror=console.log('{marker}')>"
+    },
+    {
+      "id": "js_string_double_quote_breakout",
+      "context": "js_string",
+      "payload_template": "\";console.log('{marker}');//"
+    },
+    {
+      "id": "js_string_single_quote_breakout",
+      "context": "js_string",
+      "payload_template": "';console.log('{marker}');//"
+    }
+  ]
 }

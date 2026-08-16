@@ -2,6 +2,10 @@
   "_file_type": "injectable_payload",
   "_scanner": "path_traversal",
   "_notes": "Windows + ZIP + API + Linux sequences",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside path_traversal",
-  "payloads": []
+  "_status": "Real payloads added Week 7 (docs/DECISIONS.md item 79). Schema: id, target_os, target_file, payload -- see path_traversal.py. Linux/Windows entries directly match Section 7.18's own text ('Linux: ../../../etc/hostname. Windows: ..\\..\\..\\..\\windows\\win.ini.'). ZIP and API variants are NOT included -- Section 7.18 names the category but gives no concrete pattern for either, and no other blueprint section fills the gap; flagged as an open item in docs/DECISIONS.md item 79 rather than invented.",
+  "payloads": [
+    {"id": "linux_hostname_raw", "target_os": "linux", "target_file": "hostname", "payload": "../../../etc/hostname"},
+    {"id": "windows_win_ini_backslash", "target_os": "windows", "target_file": "win_ini", "payload": "..\\..\\..\\..\\windows\\win.ini"},
+    {"id": "windows_win_ini_url_encoded_backslash", "target_os": "windows", "target_file": "win_ini", "payload": "..%5c..%5c..%5c..%5cwindows%5cwin.ini"}
+  ]
 }
