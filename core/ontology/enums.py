@@ -235,3 +235,63 @@ class BusinessValue(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     UNKNOWN = "unknown"
+
+
+class InteractshMode(str, Enum):
+    """Section 4.1's deployment modes (public primary / self-hosted
+    fallback / unavailable). CONSOLIDATED HERE (docs/DECISIONS.md item
+    81): originally defined locally in `scripts/interactsh_setup.py`
+    (Week 0), which needed it for its own one-shot preflight check.
+    `core/http/interactsh_client.py` (item 81) needs the identical
+    concept for the runtime client Section 4.2 describes -- rather than
+    a second, independently-maintained copy, `interactsh_setup.py` now
+    imports this one, matching the "ontology is the only source of
+    types" mandate and the exact precedent `docs/DECISIONS.md` item 71
+    already set for `is_allowed_outbound` (found a pre-existing local
+    definition about to be needed a second place, consolidated rather
+    than duplicated).
+
+    Values:
+        PUBLIC: The public `interactsh.com` service (Section 4.1's
+            primary path).
+        SELF_HOSTED: The self-hosted Go fallback client (Section 4.1;
+            Section 4.3: "Public 429 x 3 -> Switch to self-hosted").
+        UNAVAILABLE: Neither path is usable (Section 4.3: "Self-hosted
+            fails -> Degrade"; Section 4.2 step 5: "Timeout 5 min ->
+            oob_interaction = UNAVAILABLE").
+    """
+
+    PUBLIC = "public"
+    SELF_HOSTED = "self_hosted"
+    UNAVAILABLE = "unavailable"
+
+
+class OOBPollOutcome(str, Enum):
+    """The result of one `InteractshClient.poll()` call (docs/
+    DECISIONS.md item 81) -- distinct from `InteractshMode` above:
+    `InteractshMode` is the CLIENT's session-wide deployment state,
+    evolving at most once per failure (Section 4.3's cascade);
+    `OOBPollOutcome` is the result of ONE PROBE's poll sequence, which
+    can be `UNAVAILABLE` (this probe's own 5-minute timeout elapsed)
+    even while the client's overall `mode` is still `PUBLIC` or
+    `SELF_HOSTED` -- most probes simply never receive a callback because
+    the vulnerability being tested for isn't present, not because the
+    interactsh service itself failed.
+
+    Values:
+        RECEIVED: A callback matching this probe's correlation ID
+            arrived -- Section 5.1's `oob_interaction` evidence type's
+            actual source event.
+        UNAVAILABLE: Section 4.2 step 5, this probe's own 5-minute
+            timeout elapsed with no callback (Section 4.2: "activate
+            substitutes" -- the evidence-substitute mechanism, Section
+            5.2, not this enum's job to trigger).
+        ENV_DEPENDENT: Section 4.3: "Network partition -> ENV_DEPENDENT;
+            queue for retest" -- this client's own connectivity to
+            interactsh failed mid-poll (a transport-level error), as
+            opposed to a clean poll that simply found nothing.
+    """
+
+    RECEIVED = "received"
+    UNAVAILABLE = "unavailable"
+    ENV_DEPENDENT = "env_dependent"

@@ -3380,3 +3380,141 @@ cut, neither blocking this batch's delivery.
 
 **Files this entry covers:** none new — summary/verification entry over
 items 74-79's files.
+## 81. `InteractshClient` built — file location, pluggable design, and a consolidated ontology enum
+
+Pre-investigation, per Batch 2's own request, before any of ssrf/
+cmd_injection/xxe/deserialization/host_header. Confirmed independently,
+not taken on request: `InteractshClient` is absent from this codebase
+(grep-confirmed against `core/` and `scripts/` — every match is a
+reference to the not-yet-built class, never a definition) and has no
+Section 3 file-tree entry anywhere in the blueprint — the only trace is
+Section 4.2's 5-step docstring and Section 9.2's `PHASE_MEMORY_MODE`
+process-name string.
+
+**File location: `core/http/interactsh_client.py`, explicitly ruling
+out `core/knowledge/`.** `core/knowledge/` does not exist yet
+(confirmed); its four named residents (`rag_engine.py`,
+`knowledge_indexer.py`, `provenance.py`, `payload_engine.py`) are
+RAG/embedding/payload-template concerns with no thematic fit for an OOB
+callback client. `core/governance/` was also ruled out — policy
+enforcement, not a client. `core/http/` fits directly: this class IS an
+HTTP client polling an external service, sibling to
+`intercepting_client.py`/`rate_limited_client.py`, the two files already
+there. No new top-level directory — one already fits.
+
+**`RateLimitedClient` needed no code change, despite item 66 flagging a
+real gap.** `RateLimitedClient.request()` calls `is_allowed()` (scope-
+only), never `is_allowed_outbound()` (item 71's interactsh/metadata
+exception) — confirmed by re-reading item 66's own text, which already
+named this as "the wider gap... for whoever picks up
+`intercepting_client.py` next." Retrofitting `RateLimitedClient`
+globally was considered and rejected, for item 66's own stated reason
+("a scanner's own HTTP calls should not silently gain an SSRF-adjacent
+exception it never asked for"). The actual fix is narrower:
+`InteractshClient` takes its own dedicated `RateLimitedClient`,
+constructed by its caller with `scope_domains=["*.interactsh.com"]` —
+`_is_scope_allowed`'s existing, unmodified wildcard logic already grants
+this correctly. Every existing `RateLimitedClient` caller is completely
+unaffected; zero lines changed in either `rate_limited_client.py` or
+`scope_enforcer.py` for this entry.
+
+**`InteractshMode` consolidated into `core/ontology/enums.py`, not
+duplicated.** `scripts/interactsh_setup.py` (Week 0) already defined a
+local `InteractshMode` for its own one-shot preflight check. This
+client needs the identical concept — rather than a second,
+independently-maintained copy, the enum now lives once in the ontology,
+and `interactsh_setup.py` imports it. Same precedent as item 71's
+`is_allowed_outbound` consolidation: a pre-existing local definition,
+about to be needed a second place, consolidated rather than duplicated.
+Behavioral equivalence proven, not assumed: `interactsh_setup.py`'s
+existing 12 tests re-run unmodified, same names, same order, all
+passing, before and after the refactor. A second new enum,
+`OOBPollOutcome` (RECEIVED / UNAVAILABLE / ENV_DEPENDENT), was also
+added — the per-probe poll result, distinct from `InteractshMode`'s
+session-wide deployment state, documented in both the enum's own
+docstring and `interactsh_client.py`'s module docstring.
+
+**Three things deliberately NOT implemented, each pluggable rather than
+guessed — full reasoning in `interactsh_client.py`'s own module
+docstring:**
+1. The self-hosted Go subprocess itself. `core/control/
+   process_supervisor.py` doesn't exist yet; no self-hosted interactsh
+   Go source exists anywhere. `self_hosted_start_fn` is constructor-
+   injectable, defaulting to `None` — mirrors `interactsh_setup.py`'s
+   own already-established `try_self_hosted_fallback(start_fn)` pattern
+   and its identical reasoning, found and reused rather than
+   independently re-derived.
+2. The real interactsh wire protocol (public-key registration,
+   encrypted interaction logs) — not mentioned anywhere in Section 4.2's
+   5-step docstring. `poll_check_fn` is pluggable; the shipped default
+   is an explicitly labeled placeholder (one GET, any non-empty 2xx body
+   counts as received).
+3. What a received interaction proves for a specific `ExploitCandidate`
+   — Verification-layer work, out of scope, same boundary items 75/76
+   already drew against `xss_verifier.py`/`sqli_verifier.py`.
+
+**What IS implemented for real:** correlation ID generation (Section
+4.2 step 1, verbatim: `XBOW_{session_id}_{nonce}`), the 15s/60s poll
+schedule and 5-minute timeout (verified by test to produce exactly 8
+polls at 15s + 3 polls at 60s, summing to exactly 300s), and Section
+4.3's full failure cascade as a real state machine (429×3 → self-hosted
+attempt → success continues in SELF_HOSTED / failure or no launcher →
+UNAVAILABLE; network partition mid-poll → ENV_DEPENDENT, `mode`
+unaffected since a transport error is per-probe, not necessarily the
+whole session's connectivity).
+
+**Two further authored interpretations, neither directly specified:**
+the 429 counter is cumulative across the client's PUBLIC-mode lifetime
+(not per-probe) and resets on any clean response, matching "consecutive"
+literally; mode transitions are one-directional for the session (no
+recovery path back to `PUBLIC`) — Section 4.3 gives no cooldown rule for
+this state machine, unlike `adaptive_strategy.py`'s explicit 300-second
+one for a different state machine, and absence of a stated rule means
+none is invented.
+
+**Session-level, not per-scanner (authored):** `session_id` is already
+an established opaque `str` elsewhere in this codebase
+(`credential_lifecycle.py`, `session_persistence.py`), owned by
+session-level orchestration. Read together with Section 4.2's naming,
+this implies one shared `InteractshClient` per session across all of
+Batch 2's scanners, each calling `register_probe()` independently —
+not yet wired to real orchestration (doesn't exist yet).
+
+**Two self-caught bugs during test-writing, both real Python/HTTP
+semantics, neither a logic bug in the client itself:**
+1. A test asserted the poll-check request's hostname preserves
+   `correlation_id`'s exact case. It doesn't — httpx correctly
+   lowercases hostnames per RFC 3986 during URL construction. Confirmed
+   by writing the strict assertion first and watching it fail against a
+   real (non-mocked-away) URL build, not assumed. Fixed the test to
+   compare case-insensitively, and left a note in
+   `_default_poll_check`'s own docstring for whoever replaces it with a
+   real protocol: exact-case correlation matching, if ever needed,
+   belongs in a query parameter or path segment, not the hostname.
+2. A test asserted `OOBPollOutcome.UNAVAILABLE != InteractshMode.
+   UNAVAILABLE`. `str, Enum` members compare equal across different
+   enum classes whenever their string values match (falls through to
+   `str.__eq__`, ignoring enum identity) — standard behavior this
+   codebase already relies on throughout (every enum in `enums.py` is
+   `str, Enum`), not a bug. Fixed to assert the type distinction that's
+   actually true (`type(...) is not type(...)`) instead of a value-
+   equality claim that isn't.
+
+**Verification:** `python3 -m pytest tests/core/http/test_interactsh_client.py`
+— 29/29, covering all five `OOBPollOutcome` paths, the full 429 cascade
+(success, failure, raising starter, streak-reset, 429-while-already-
+self-hosted), and the exact poll schedule. `tests/scripts/
+test_interactsh_setup.py` — 12/12, unchanged. `tests/core/ontology/
+test_enums.py` — 8 new (`InteractshMode` + `OOBPollOutcome`). Full
+suite: 1103/1103 (1066 Batch-1 baseline + 29 + 8 = 1103). Both CI hooks
+green. Go suite unaffected, re-run: 32/32.
+
+**Files this entry covers:** `core/http/interactsh_client.py` (new),
+`core/ontology/enums.py` (`InteractshMode` added, `OOBPollOutcome`
+added), `scripts/interactsh_setup.py` (local `InteractshMode` removed,
+now imported; header docstring updated),
+`tests/core/http/test_interactsh_client.py` (new, 29 tests),
+`tests/core/ontology/test_enums.py` (`TestInteractshMode` +
+`TestOOBPollOutcome` added, 8 tests). `tests/scripts/
+test_interactsh_setup.py` unmodified (12 tests, all still passing,
+confirmed before and after).

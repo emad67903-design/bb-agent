@@ -17,6 +17,14 @@ which this project's build sandbox does not have (network allowlist is
 scoped to package registries and GitHub). Unit tests mock the HTTP layer
 end to end; live verification against the real interactsh.com should be
 re-run in an environment with that egress before Week 0 sign-off.
+
+WEEK 7 UPDATE (docs/DECISIONS.md item 81): `InteractshMode` moved to
+`core/ontology/enums.py` -- `core/http/interactsh_client.py` (the
+runtime client this file's own comments already anticipated, e.g.
+line ~84's "InteractshClient's job at runtime") needed the identical
+enum, so it is now defined once and imported here, not duplicated.
+Behavior of every function below is unchanged; only the enum's location
+moved.
 """
 
 from __future__ import annotations
@@ -24,22 +32,15 @@ from __future__ import annotations
 import argparse
 import time
 from dataclasses import dataclass
-from enum import Enum
 
 import requests
+
+from core.ontology.enums import InteractshMode
 
 PUBLIC_INTERACTSH_HEALTH_URL = "https://interactsh.com/"
 PUBLIC_RATE_LIMIT_CONSECUTIVE_429 = 3  # Section 4.3: "Public 429 x 3 -> Switch to self-hosted"
 REQUEST_TIMEOUT_SECONDS = 10
 DEFAULT_RETRY_DELAY_SECONDS = 2.0
-
-
-class InteractshMode(str, Enum):
-    """Section 4.1 deployment modes."""
-
-    PUBLIC = "public"
-    SELF_HOSTED = "self_hosted"
-    UNAVAILABLE = "unavailable"
 
 
 @dataclass(frozen=True)

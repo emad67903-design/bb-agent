@@ -8,6 +8,8 @@ import pytest
 from core.ontology.enums import (
     BusinessValue,
     EvidenceType,
+    InteractshMode,
+    OOBPollOutcome,
     PayloadFileType,
     TargetType,
     TierLevel,
@@ -193,3 +195,60 @@ class TestBusinessValue:
         scoring_outcomes = {BusinessValue.LOW, BusinessValue.MEDIUM, BusinessValue.HIGH}
         assert BusinessValue.UNKNOWN not in scoring_outcomes
         assert len(scoring_outcomes) == 3
+
+
+class TestInteractshMode:
+    """docs/DECISIONS.md item 81 -- consolidated here from
+    scripts/interactsh_setup.py's own prior local definition."""
+
+    def test_has_exactly_three_members(self):
+        assert len(InteractshMode) == 3
+
+    def test_members_match_section_4_1_and_4_3(self):
+        assert InteractshMode.PUBLIC == "public"
+        assert InteractshMode.SELF_HOSTED == "self_hosted"
+        assert InteractshMode.UNAVAILABLE == "unavailable"
+
+    def test_is_a_str_enum(self):
+        """Matches every other enum in this file -- JSON-serializes as
+        a plain string, same convention as BusinessValue/TargetType/etc."""
+        assert isinstance(InteractshMode.PUBLIC, str)
+
+    def test_survives_a_json_round_trip(self):
+        import json
+
+        value = InteractshMode.SELF_HOSTED
+        restored = InteractshMode(json.loads(json.dumps(value.value)))
+        assert restored is value
+
+
+class TestOOBPollOutcome:
+    def test_has_exactly_three_members(self):
+        assert len(OOBPollOutcome) == 3
+
+    def test_members_match_section_4_2_and_4_3(self):
+        assert OOBPollOutcome.RECEIVED == "received"
+        assert OOBPollOutcome.UNAVAILABLE == "unavailable"
+        assert OOBPollOutcome.ENV_DEPENDENT == "env_dependent"
+
+    def test_is_a_str_enum(self):
+        assert isinstance(OOBPollOutcome.RECEIVED, str)
+
+    def test_distinct_type_from_interactsh_mode_despite_shared_unavailable_string(self):
+        """Both enums have an UNAVAILABLE-shaped member for different
+        reasons (module docstring in interactsh_client.py: session-wide
+        deployment state vs. one probe's own timeout) -- confirms they
+        remain genuinely separate enum TYPES. Does NOT assert `!=`:
+        `str, Enum` members compare equal across different enum classes
+        whenever their underlying string values match (falls through to
+        `str.__eq__`, ignoring enum identity) -- standard Python
+        behavior this codebase already relies on throughout (every enum
+        in this file is `str, Enum` for exactly this JSON-friendliness),
+        not a bug introduced here. First written with a `!=` assertion,
+        which failed against real Python semantics, not assumed --
+        corrected to test the type distinction that's actually true and
+        actually meaningful, rather than a value-equality claim that
+        isn't."""
+        assert OOBPollOutcome.UNAVAILABLE.value == InteractshMode.UNAVAILABLE.value
+        assert type(OOBPollOutcome.UNAVAILABLE) is not type(InteractshMode.UNAVAILABLE)
+        assert OOBPollOutcome.UNAVAILABLE is not InteractshMode.UNAVAILABLE
