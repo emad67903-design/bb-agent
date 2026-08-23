@@ -3518,3 +3518,110 @@ now imported; header docstring updated),
 `TestOOBPollOutcome` added, 8 tests). `tests/scripts/
 test_interactsh_setup.py` unmodified (12 tests, all still passing,
 confirmed before and after).
+
+## 82. `create_scanner` gains `**scanner_kwargs` passthrough — closes the InteractshClient-reachability gap, before any of Batch 2's five scanners
+
+Flagged ahead of ssrf/cmd_injection/xxe/deserialization/host_header, not
+discovered mid-scanner: item 81 built `InteractshClient` as explicitly
+session-level, shared across every scanner needing OOB confirmation
+("one `InteractshClient` per BB-Agent session... each calls
+`register_probe()` for its own fresh correlation ID against the same
+client, rather than each constructing its own client" — item 81, above).
+But `BaseScanner.__init__` (item 73) takes only `session`, and
+`create_scanner` (Week 5) calls `scanner_cls(session)` with nothing else
+to give a scanner. No scanner had any path to a shared
+`InteractshClient` instance. Confirmed by direct read of both files
+(`core/scanners/base_scanner.py`, `core/scanners/registry.py`) before
+proposing a fix, not assumed from their names.
+
+**Two options considered.**
+
+**(1) Rejected — `interactsh_client: InteractshClient | None = None` on
+`BaseScanner.__init__` itself, threaded through `create_scanner`.**
+`BaseScanner` is "the one interface all 29 scanners inherit from"
+(Engineering Constitution). Of the 29, exactly 5 need OOB — Section
+5.3's achievability matrix marks only SSRF/CMDi/XXE/Deserialization/Host
+Header as OOB-achievable (grep-confirmed against the table before this
+entry was written; SQLi's OOB cell is ⚠️ conditional, not ✅, and its own
+achievable evidence path is the `boolean_differential_confirmed`
+substitute, item covered in Section 5.2 — SQLi does not need
+`interactsh_client`). Adding an OOB-specific dependency to the shared
+base for the other 24 misreads "the one interface" as "the one place
+for every dependency any scanner might ever need," not what it actually
+names — the one thing EVERY scanner needs (`session`).
+
+It also would not, on its own, close the gap: every scanner built so
+far (Batch 1 — `xss_scanner.py`, `sqli_scanner.py`, `ssti_scanner.py`,
+`lfi_scanner.py`, `path_traversal.py`) already defines its own
+`__init__` (e.g. `def __init__(self, session, *, payloads=None)`),
+calling `super().__init__(session)` and managing its own extra state. A
+parameter added to `BaseScanner.__init__` is invisible to a subclass's
+own `__init__` unless that subclass also declares and forwards it — so
+each of Batch 2's five scanners would need its own constructor change
+regardless of where the parameter lives. Option (1) would touch a
+shared interface all 5 existing scanners and `BaseScanner`'s own tests
+depend on, for no reachability benefit over option (2), while giving 24
+scanners an attribute they will never read.
+
+**(2) Chosen — generic `**scanner_kwargs` on `create_scanner`, forwarded
+verbatim to `scanner_cls(session, **scanner_kwargs)`.**
+`BaseScanner.__init__` is untouched: zero lines changed, confirmed by
+this entry's own diff. Each scanner that needs `interactsh_client`
+declares it as its own keyword-only constructor parameter — exactly the
+precedent Batch 1 already set with `payloads` (test-injectable,
+production-defaulted). `create_scanner` stays completely
+scanner-agnostic: it does not know or care which `scanner_id` accepts
+which extra kwarg, which is what keeps it from special-casing an
+individual scanner by name (Engineering Constitution, "[SCANNER_
+REGISTRY IS THE ONLY LOOKUP PATH]" — the same mandate item 22's 29-vs-28
+Tier C bug exists to prevent a second instance of). A kwarg a given
+scanner's `__init__` does not declare raises `TypeError` at the
+`scanner_cls(...)` call, ordinary Python constructor behavior — not
+caught or translated by `create_scanner`. Full reasoning and the two
+options' comparison also live in `registry.py`'s own module docstring,
+at the exact decision point, per the Engineering Constitution's
+traceability requirement.
+
+**Deliberately NOT built here:** no Batch 2 scanner yet declares an
+`interactsh_client` parameter — that is each of those five scanners' own
+constructor work, to be done per-scanner once Batch 2 starts, the same
+way each of Batch 1's five scanners individually decided their own
+`payloads` default. This entry closes the PLUMBING gap (a scanner CAN
+reach a shared instance once its own `__init__` asks for one), not the
+scanners themselves. Whether `interactsh_client` should be required or
+optional-with-graceful-OOB-degradation on each of the five (Section
+4.3's "Degrade: in-band SSRF only; CMDi/XXE/Deser skip OOB phase" is
+explicitly `InteractshClient`'s caller's job, per item 81's own last
+paragraph, not this client's) is left to each scanner's own build,
+matching the boundary item 81 already drew.
+
+**Behavioral equivalence, proven, not assumed:**
+`tests/core/scanners/test_base_scanner.py`, `test_registry.py`'s
+pre-existing classes, and all five Batch 1 scanner test files' (plus
+`test_ci_hooks.py`'s) pre-existing tests re-run unmodified before and
+after this change — same 97 test names, same order, all passing both
+times (diffed programmatically, not eyeballed: identical output).
+`scanner_kwargs` defaults to empty, so `scanner_cls(session, **{})` is
+`scanner_cls(session)`, byte-identical to the pre-item-82 call for
+every scanner that does not opt in.
+
+**Verification:** `python3 -m pytest tests/core/scanners/
+test_base_scanner.py tests/core/scanners/test_registry.py
+tests/core/scanners/test_xss_scanner.py tests/core/scanners/
+test_sqli_scanner.py tests/core/scanners/test_ssti_scanner.py
+tests/core/scanners/test_lfi_scanner.py tests/core/scanners/
+test_path_traversal.py tests/core/scanners/test_ci_hooks.py` — 102/102
+(97 pre-existing, confirmed identical by diff, + 5 new in
+`TestCreateScannerKwargsPassthrough`). Full suite: 1108/1108 (1103 +
+5). Go suite unaffected, re-run: 32/32. Both CI hooks green
+(`ci-scanner-http-check`, `ci-scope-diff`). `payload_inventory.py`
+re-run as an unrelated sanity check (this entry touches no payload
+file): unchanged, 26 manifest entries checked.
+
+**Files this entry covers:** `core/scanners/registry.py`
+(`create_scanner` signature + docstring; module docstring's item-82
+paragraph added). `core/scanners/base_scanner.py`: **not modified** —
+zero lines changed, the load-bearing fact of option (2) over option
+(1). `tests/core/scanners/test_registry.py`
+(`TestCreateScannerKwargsPassthrough` added, 5 tests; all prior classes
+unmodified). No Batch 2 scanner file exists yet.

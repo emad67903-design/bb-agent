@@ -120,3 +120,83 @@ class TestRegistryStartsEmptyInProduction:
         """Confirms the underlying object type directly, independent of
         the isolated_registry fixture's own clearing behavior."""
         assert isinstance(registry_module.SCANNER_REGISTRY, dict)
+
+
+class _DummyScannerWithExtra(BaseScanner):
+    """Mirrors the real per-scanner optional-kwarg pattern Batch 1
+    already established (e.g. `xss_scanner.py`'s `payloads` param,
+    docs/DECISIONS.md items 74-80) -- used here to prove
+    `create_scanner`'s `**scanner_kwargs` passthrough (item 82) is
+    generic, not hardcoded to any one scanner or parameter name."""
+
+    def __init__(self, session, *, extra: object | None = None) -> None:
+        super().__init__(session)
+        self.extra = extra
+
+    async def scan(self, target_url: str) -> list[ExploitCandidate]:
+        return []
+
+
+class _DummyScannerWithTwoExtras(BaseScanner):
+    """See `_DummyScannerWithExtra`. Two extra kwargs, to prove
+    forwarding isn't limited to a single keyword."""
+
+    def __init__(self, session, *, extra: object | None = None, another: object | None = None) -> None:
+        super().__init__(session)
+        self.extra = extra
+        self.another = another
+
+    async def scan(self, target_url: str) -> list[ExploitCandidate]:
+        return []
+
+
+class TestCreateScannerKwargsPassthrough:
+    """docs/DECISIONS.md item 82: `create_scanner` forwards any extra
+    keyword arguments verbatim to the scanner class's own `__init__`,
+    after `session` -- the mechanism that lets a scanner reach a
+    shared, session-level dependency (e.g. `InteractshClient`, item 81,
+    Batch 2) without touching `BaseScanner.__init__`, the interface all
+    29 scanners share.
+    """
+
+    def test_extra_kwarg_forwarded_to_scanner_constructor(self):
+        register("dummy_extra")(_DummyScannerWithExtra)
+        sentinel = object()
+        scanner = create_scanner("dummy_extra", scope_domains=["example.com"], extra=sentinel)
+        assert scanner.extra is sentinel
+
+    def test_omitted_extra_kwarg_uses_scanner_own_default(self):
+        register("dummy_extra")(_DummyScannerWithExtra)
+        scanner = create_scanner("dummy_extra", scope_domains=["example.com"])
+        assert scanner.extra is None
+
+    def test_multiple_extra_kwargs_all_forwarded(self):
+        register("dummy_two_extras")(_DummyScannerWithTwoExtras)
+        sentinel_a, sentinel_b = object(), object()
+        scanner = create_scanner(
+            "dummy_two_extras",
+            scope_domains=["example.com"],
+            extra=sentinel_a,
+            another=sentinel_b,
+        )
+        assert scanner.extra is sentinel_a
+        assert scanner.another is sentinel_b
+
+    def test_scanner_not_opting_in_is_unaffected_when_kwarg_omitted(self):
+        """`_DummyScannerA` (this file's original dummy, no `__init__`
+        override at all -- uses `BaseScanner.__init__` directly)
+        continues to construct exactly as before. Proves the
+        passthrough is opt-in per scanner, not a change to the shared
+        `BaseScanner` interface every scanner inherits."""
+        register("dummy_a")(_DummyScannerA)
+        scanner = create_scanner("dummy_a", scope_domains=["example.com"])
+        assert isinstance(scanner, _DummyScannerA)
+
+    def test_kwarg_unsupported_by_scanner_raises_type_error_not_swallowed(self):
+        """No silent absorption: a kwarg the target scanner's own
+        `__init__` doesn't declare fails loudly, the same as calling any
+        Python constructor with an unexpected keyword argument --
+        `create_scanner` does not catch or translate this."""
+        register("dummy_a")(_DummyScannerA)
+        with pytest.raises(TypeError):
+            create_scanner("dummy_a", scope_domains=["example.com"], extra=object())
