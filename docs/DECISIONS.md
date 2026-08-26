@@ -3625,3 +3625,509 @@ zero lines changed, the load-bearing fact of option (2) over option
 (1). `tests/core/scanners/test_registry.py`
 (`TestCreateScannerKwargsPassthrough` added, 5 tests; all prior classes
 unmodified). No Batch 2 scanner file exists yet.
+
+## 83. `ssrf_scanner.py` — Batch 2's first scanner (Section 7.3); pins `interactsh_client: InteractshClient | None = None` as the exact, shared parameter name for all five Batch 2 scanners
+
+**Parameter name pinned here, binding on items 84–87 (Waild-directed):**
+per Waild's item-82 approval message, before any Batch 2 scanner code
+was written: all five OOB-dependent scanners (`ssrf`, `cmd_injection`,
+`xxe`, `deserialization`, `host_header`) declare the identical
+constructor parameter
+
+```python
+interactsh_client: InteractshClient | None = None
+```
+
+keyword-only, same position convention Batch 1 already set for
+`payloads`. Name, type, and default must not drift per-scanner — the
+precedent this guards against is named explicitly in Waild's directive:
+item 22's 29-vs-28 Tier C list-drift bug. `ssrf_scanner.py` (this entry)
+is the first of the five to implement it; `cmd_injection.py`,
+`xxe_scanner.py`, `deserialization.py`, and `host_header.py` (items
+84–87) each confirm the identical signature at the point they're built,
+not merely assert it once here and move on.
+
+**Semantics — not a free choice, Section 4.3 already specifies it:**
+item 82's own scoping left "required vs. optional-with-degradation" to
+each scanner's own build. Building the first one now: Section 4.3's
+failure-fallback table already answers this precisely — "Self-hosted
+fails → Degrade: in-band SSRF only; CMDi/XXE/Deser skip OOB phase."
+`interactsh_client=None` (or a provided client whose `.mode` is already
+`InteractshMode.UNAVAILABLE`) means `_scan_oob` returns `[]`
+immediately, logging `[SSRF_OOB_UNAVAILABLE]`; the in-band metadata
+path is entirely unaffected, since it never touches
+`interactsh_client`. This is faithful implementation of an
+already-specified rule, not a fresh judgment call — confirmed by
+reading Section 4.3 before writing `_scan_oob`, not assumed.
+
+**`is_allowed_outbound` / `RateLimitedClient` — item 71's forward
+reference traced through to a real scanner and found NOT to
+materialize.** `scope_enforcer.is_allowed_outbound()`'s own docstring
+(item 71, Week 7 foundation, written before any Batch 2 scanner
+existed) names its intended callers: "Week 7's CMDi/XXE/
+Deserialization/SSRF scanners (OOB confirmation, IMDSv2 metadata
+probing) via `RateLimitedClient`." `RateLimitedClient.request()`, as
+built (Week 5), calls `is_allowed()` — scope-only — never
+`is_allowed_outbound()`. Grepped before writing a line of scanner code:
+`is_allowed_outbound` has exactly one caller in the entire codebase —
+`core/sandbox/safety_guard.py`'s `call_target()` — confirming
+`RateLimitedClient` was never actually wired to it.
+
+Traced through `ssrf_scanner.py`'s actual request pattern to determine
+whether THIS scanner needs that wiring after all: every metadata URL
+(AWS/GCP/Azure) and every OOB URL is embedded as a **query-parameter
+value** delivered to `target_url` — a host already in `scope_domains`
+— never a destination `self.session` connects to directly.
+169.254.169.254 is link-local (RFC 3927): it only resolves to real
+cloud metadata from inside the *target's* own VM network, which is the
+entire mechanism SSRF exploits (the vulnerable target makes that
+request on the scanner's behalf; the scanner making it directly would
+be testing nothing). OOB polling goes through `InteractshClient`'s own
+dedicated `RateLimitedClient` (item 81 — constructed by its caller with
+`scope_domains=["*.interactsh.com"]`), never this scanner's own
+`self.session`.
+
+**Conclusion: `RateLimitedClient` needs no change.** Item 71's
+anticipation, read literally, does not materialize once a real Batch 2
+scanner is built against it — not because item 71 was careless (it was
+written before item 81 existed, and item 81's own entry already
+explicitly rejected retrofitting `RateLimitedClient` globally for the
+interactsh half, "for the exact reason item 66 already gave: 'a
+scanner's own HTTP calls should not silently gain an SSRF-adjacent
+exception it never asked for'" — the metadata half of item 71's
+anticipation turns out to need the identical rejection, for the
+identical reason, once actually traced through). Recorded here so this
+doesn't sit as a silently-unresolved forward reference: item 71's
+anticipated need is closed, with reasoning, not left open for a future
+reader to wonder about. The remaining four Batch 2 scanners (cmd_
+injection, xxe, deserialization, host_header) are expected to fit the
+same pattern — each confirms this against its own actual request shape
+when built, per the same "don't assume prior batches' silence proves
+it" standing instruction that applies to `probe_correlation_id`.
+
+**Priorities 1+2 deliberately not implemented** — Section 7.3's own
+"Implementation note": "Do not document Priority 1+2 as the default
+path for simple URL-injection SSRF." This scanner has exactly one
+capability — substituting a payload into an existing query parameter
+(`param_injection.py`'s established, GET-only scope) — no method-
+override or header-injection capability of its own. Priority 3 (AWS
+IMDSv1, "always achievable"), Priority 4 (GCP), and Priority 5 (Azure)
+are implemented; Priority 1 (PUT `/latest/api/token`) and Priority 2
+(GET with that token) are not, matching Section 7.3's own guidance that
+their achievement is a chain-level (SSRF + header injection) finding,
+Deep Lane's job, not Fast Lane's.
+
+**`probe_correlation_id` — first real usage, confirmed correct, not
+assumed from the field's own docstring alone:** holds the *bare*
+correlation ID (`"XBOW_{session_id}_{nonce}"`), not the full `oob_url`
+— Section 4.2's own notation treats these as two different strings.
+Derived via the identical `oob_url.removesuffix(INTERACTSH_SUFFIX)`
+`InteractshClient.poll()` already uses internally (same imported
+constant, not a re-typed literal). One `register_probe()` call per
+candidate parameter, not one shared across all of them on an endpoint
+— `ExploitCandidate.parameter` is a required field for SSRF (not one
+of item 69's four no-parameter cases: CORS/Host-Header/CSRF/Auth), and
+a shared correlation ID would make that field unrecoverable the moment
+more than one parameter is tested. Verified directly: `test_
+multiple_parameters_get_distinct_correlation_ids` confirms two
+candidates on a two-parameter URL carry two distinct, non-`None`
+correlation IDs.
+
+**Concurrent OOB polling — authored efficiency decision, not
+blueprint-cited:** `InteractshClient.poll()` blocks up to 5 real
+minutes per call (Section 4.2 step 5). Section 7.3 does not discuss
+concurrency across multiple candidate parameters on one endpoint.
+Polling sequentially would cost up to N × 5 minutes for one `scan()`
+call on one endpoint, against Section 6.6's 1–3 hour Fast Lane budget
+for all 29 scanners combined. `_scan_oob` sends every probe first,
+then polls all of them together via `asyncio.gather`, bounding one
+`scan()` call's OOB wall-clock cost at ~5 minutes regardless of
+parameter count — each `poll()` call stays independently scoped to its
+own correlation ID, so this changes wall-clock cost only, never
+detection semantics.
+
+**AWS's 401 check is baseline-guarded; GCP/Azure's body-marker checks
+are not — asymmetric on purpose, not an oversight.** HTTP 401 is a
+generic status code an auth-walled endpoint could already return for
+every request regardless of any SSRF payload; one baseline fetch (the
+same one-baseline-per-`scan()`-call convention `lfi_scanner.py`/
+`sqli_scanner.py` already use) guards it:
+`response.status_code == 401 and baseline.status_code != 401`. The
+GCP/Azure markers (`computeMetadata`, the paired `status`+
+`permission_denied` JSON-error check, the quoted `"compute"`/
+`"network"` JSON keys) are specific enough that Section 7.3 does not
+ask for a baseline comparison; adding one un-requested risks a false
+negative on the exact narrow signal named. `test_401_baseline_also_
+401_produces_no_candidate` confirms the guard fires; the initial draft
+of two unrelated field-level tests (`raw_response_snapshot` truncation,
+`http_method`) briefly regressed against this exact guard — their
+handlers returned 401 unconditionally, so the baseline fetch was also
+401 and correctly produced zero candidates. Caught by the test run
+itself (0 candidates where 1 was asserted), not missed: both handlers
+fixed to return a non-401 baseline, matching every other AWS test in
+the file. Confirms the guard behaves as designed even where a test
+didn't intend to exercise it.
+
+**Detection markers are authored, not blueprint-enumerated** —
+`_matches_gcp_signal`/`_matches_azure_signal` — same flag `sqli_
+scanner.py`'s `DB_ERROR_SIGNATURES` and `lfi_scanner.py`'s `WINDOWS_
+FINGERPRINT_HEADERS` already carry. Section 7.3 names each signal in
+prose; the exact substring checks are this scanner's own literal
+reading of that prose.
+
+**Verification:** `tests/core/scanners/test_ssrf_scanner.py` — 30/30
+(new). Full suite: 1138/1138 (1108 + 30). Go suite unaffected: 32/32.
+Both CI hooks green (`ci-scanner-http-check`, `ci-scope-diff`).
+`payload_inventory.py`: 26 manifest entries, unchanged count (this
+entry fills in `ssrf_payloads.json`'s content, not its registration).
+
+**Files this entry covers:** `core/scanners/ssrf_scanner.py` (new),
+`data/payloads/ssrf_payloads.json` (stub → 4 real entries: 3
+`in_band_metadata` + 1 `oob` template), `tests/core/scanners/
+test_ssrf_scanner.py` (new, 30 tests).
+
+## 84. `cmd_injection.py` — Batch 2's second scanner (Section 7.8)
+
+**`interactsh_client: InteractshClient | None = None` — confirmed
+identical, not re-asserted from item 83's silence:** same name, type,
+default, keyword-only position as `ssrf_scanner.SSRFScanner`. Checked
+directly against this file's own signature before writing this
+sentence, per Waild's directive that each of the five confirms it at
+build time.
+
+**Pure OOB, no in-band fallback — the one genuine design difference
+from item 83:** Section 7.8's complete detection text is "OOB only";
+there is no second technique to fall back on the way SSRF's in-band
+metadata matrix stands independent of interactsh. `scan()` therefore
+short-circuits to `[]` the moment `interactsh_client` is `None` or
+already `UNAVAILABLE` — Section 4.3's "CMDi/XXE/Deser skip OOB phase"
+literally has no other phase to name for this scanner. Verified this
+short-circuits **before any request is sent at all**
+(`test_no_interactsh_client_returns_empty_without_any_request` asserts
+`call_count == 0`) — SSRF's equivalent case still made in-band requests
+because it has an independent path; this one has nothing to run.
+
+**`is_allowed_outbound` / `RateLimitedClient` — re-traced against this
+scanner's own mechanics, not assumed from item 83:** the injected
+payload is a shell metacharacter sequence embedding an interactsh
+hostname (e.g. `"; ping XBOW_xxx.interactsh.com -c 1"`), delivered the
+identical way SSRF's metadata/OOB URLs are — as a query-parameter value
+sent to `target_url` (already in `scope_domains`). The vulnerable
+target's own shell resolves and pings the embedded hostname; this
+scanner's `self.session` never connects to it. Same conclusion as item
+83: no `RateLimitedClient` change needed. Independently re-confirmed,
+not inherited by assumption.
+
+**Separator × OS variants (8 payload entries) — authored, flagged the
+same way item 83's GCP/Azure markers are:** Section 7.8 gives one
+literal example (`; ping {interactsh_url} -c 1`). `cmd_payloads.json`
+extends this across 4 separators (`;`, `|`, `&&`, newline) × 2 OS
+ping-flag variants (`-c 1` Unix, `-n 1` Windows) — real CMDi surface
+varies by injection context and target OS, neither knowable in advance,
+and Section 7.8 doesn't restrict this scanner to the one literal
+example the way, say, SSTI's engine-fingerprint payloads are
+implicitly bounded by "which template engines exist." All 8 remain
+single-echo, non-destructive — `test_no_destructive_payloads` greps for
+`rm `/`del `/`format`/`shutdown`/`reboot`/`>` across every entry and
+confirms none appear, and every entry contains `ping`, matching Section
+10.1's `TIER_C_RULES` auto_allow line verbatim: "CMDi OOB interactsh
+ping only (no destructive command)."
+
+**Response text captured for `raw_response_snapshot` even though the
+callback, not the response, is the actual proof:** this was nearly
+inconsistent with `ssrf_scanner.py` — an early draft discarded the
+probe response entirely (`raw_response_snapshot=None`), noticed and
+fixed before running any test, to match `ssrf_scanner.py`'s OOB path
+capturing the real (truncated) response text. Kept for the same
+reason: the field's own docstring describes it as "truncated response
+body backing the signal," and a captured-but-unused response is more
+faithful to that than a hardcoded `None`.
+
+**One `oob_url` per (parameter, payload-variant) pair, not per
+parameter alone:** this scanner has both multiple candidate parameters
+AND multiple payload variants per parameter (unlike item 83's SSRF OOB
+path, one variant only) — every `(parameter, variant)` pair gets its
+own `register_probe()` call.
+`test_multiple_parameters_and_variants_produce_full_cross_product`
+confirms 2 parameters × 2 payload variants yields exactly 4 candidates,
+not 2.
+
+**Verification:** `tests/core/scanners/test_cmd_injection.py` — 14/14
+(new). Full suite: 1152/1152 (1138 + 14). `ci-scanner-http-check`:
+green. Go suite and `ci-scope-diff` unaffected by this entry (no
+Go/scope files touched) — re-verified together with items 85–87 before
+the batch bundle, not re-run per entry from here on, matching Batch
+1's own per-item verification granularity (item 74–79's individual
+entries don't each re-quote the Go suite either; item 80, the batch's
+last entry, is where the full cross-batch verification lands).
+
+**Files this entry covers:** `core/scanners/cmd_injection.py` (new),
+`data/payloads/cmd_payloads.json` (stub → 8 real entries),
+`tests/core/scanners/test_cmd_injection.py` (new, 14 tests).
+
+## 85. `xxe_scanner.py` — Batch 2's third scanner (Section 7.9); first real departure from `param_injection.py`'s pattern, extends item 69's no-parameter list
+
+**The genuine architectural finding this entry exists to record:**
+every scanner built so far — Batch 1's five, plus items 83/84's
+`ssrf_scanner.py`/`cmd_injection.py` — substitutes a payload into one
+of `target_url`'s *existing* query parameters. XXE has no existing
+parameter to substitute into: Section 7.9's technique is a crafted
+whole XML document, POSTed as the entire request body, with an
+external-entity DTD doing the actual injection work. Confirmed by
+reading Section 7.9 in full before writing a line of code, not assumed
+from the file tree's one-line description — `iter_query_param_
+injections` is not imported into `xxe_scanner.py` at all.
+
+**`ExploitCandidate.parameter = None` — item 69's four-case list
+extended to five, not silently reached for.** Item 69's own docstring
+names exactly four no-single-parameter `vuln_type`s — CORS, Host
+Header, CSRF, Auth — and states "every other vuln_type is expected to
+supply a real value." XXE was not among the four; nothing before this
+entry flagged it. Checked directly against XXE's real mechanics (see
+above): there is no query/body *parameter* being substituted, the
+*entire body* is the payload — the same "no single query/body
+parameter in the conventional sense" shape item 69 already used to
+justify CORS and CSRF, just not applied to XXE at the time item 69 was
+written (Batch 1, before any batch actually exercised XXE). `parameter
+= None` for both of `xxe_scanner.py`'s techniques.
+`test_hostname_like_content_produces_candidate` and `test_callback_
+received_produces_candidate_with_bare_correlation_id` both assert
+`candidate.parameter is None` directly, not merely omit checking it.
+
+**`http_method = "POST"`, not Batch 1/83/84's `"GET"`** — the accurate
+value for what this scanner actually sends. Section 6.9's `DEDUP_KEY`
+including `http_method` exists exactly so this doesn't collide with a
+hypothetical GET-based finding on the same endpoint; XXE has never
+been, and could not correctly be, a GET-based technique.
+
+**`interactsh_client: InteractshClient | None = None` — confirmed
+identical, independently, a third time:** same name/type/default as
+items 83 and 84. This scanner's `None` semantics differ from `cmd_
+injection.py`'s (which has no fallback at all): XXE degrades to the
+`in_band_file_read` technique only, per Section 7.9's own "AND/OR"
+— `test_no_interactsh_client_skips_oob_but_hostname_check_still_runs`
+confirms the hostname path still produces a candidate when
+`interactsh_client=None`, distinguishing this from `cmd_injection.py`'s
+"nothing runs at all" case.
+
+**`is_allowed_outbound` / `RateLimitedClient` — re-traced a third time,
+same conclusion:** the OOB URL lives inside the XML body's entity
+`SYSTEM` identifier, delivered to `target_url` — still never a
+destination `self.session` connects to directly. No `RateLimitedClient`
+change. Three of Batch 2's five scanners now independently confirm
+item 71's anticipated need does not materialize; the remaining two
+(deserialization, host_header) are expected to as well, each still
+checked against its own actual mechanics when built, not assumed from
+this streak.
+
+**`content_heuristics.looks_like_hostname_content` — third scanner to
+share it**, after `lfi_scanner.py` and `path_traversal.py` (item 78's
+note already anticipated exactly this kind of reuse). Same helper,
+same three-part rule, same inherent black-box limits — not
+re-implemented, not re-litigated.
+
+**Exactly two payload entries, not extended the way items 83/84's
+were:** Section 7.9's text names exactly two techniques ("OOB DTD
+callback AND/OR `/etc/hostname` file read") with no per-context/per-OS
+coverage gap the way CMDi's separators or SSRF's cloud providers have —
+`xxe_payloads.json` has one entry per technique, no invented DTD
+structural variants, one Content-Type value
+(`application/xml`, authored, flagged the same way).
+
+**Verification:** `tests/core/scanners/test_xxe_scanner.py` — 16/16
+(new). Full suite: 1168/1168 (1152 + 16). `ci-scanner-http-check`:
+green.
+
+**Files this entry covers:** `core/scanners/xxe_scanner.py` (new),
+`data/payloads/xxe_payloads.json` (stub → 2 real entries),
+`tests/core/scanners/test_xxe_scanner.py` (new, 16 tests).
+
+## 86. `deserialization.py` — Batch 2's fourth scanner (Section 7.16); Python-only OOB gadget, Java/PHP coverage flagged as a genuine open gap rather than fabricated
+
+**Same pure-OOB shape as `cmd_injection.py` (item 84), confirmed
+against this scanner's own text, not copied by assumption:** Section
+7.16: "Detection + safe exploit: OOB only. Gadget chain triggers
+DNS/HTTP to interactsh. No RCE gadget." `interactsh_client:
+InteractshClient | None = None` confirmed identical to items 83–85.
+`is_allowed_outbound`/`RateLimitedClient` re-traced a fourth time
+against this scanner's actual mechanics (the gadget's DNS-lookup target
+is embedded in the serialized payload, delivered as a query-parameter
+value — same conclusion, independently re-derived, not assumed from the
+streak).
+
+**The investigation this entry exists to record: Section 3.1 asks for
+"Java/Python/PHP OOB gadgets." Only Python is delivered.** Checked
+what's actually available before writing any payload, not after:
+
+```
+$ which java javac; php --version
+/usr/bin/java
+(javac not found)
+php: not found
+```
+
+- **Python — built.** A safe, non-RCE `__reduce__` gadget:
+  `socket.gethostbyname(oob_url)`. DNS lookup only — no file I/O, no
+  subprocess, no code execution — the same "safest gadget" pattern the
+  security community already uses for exactly this purpose (Java
+  ysoserial's URLDNS gadget: `java.net.URL.hashCode()` triggers DNS
+  resolution and nothing else). Verified genuinely, not eyeballed: `pickle.dumps` →
+  `pickletools.dis` (confirmed the disassembly shows exactly one
+  `GLOBAL` reference to `gethostbyname` and a `REDUCE`, nothing
+  resembling `BUILD`/`STACK_GLOBAL` abuse) → `pickle.loads` against a
+  **patched** `_socket.gethostbyname` (not `socket.gethostbyname` —
+  the first attempt patched the wrong module and the unpickle call
+  fell through to a real DNS resolution attempt, caught by the test
+  itself failing with `socket.gaierror` rather than silently "working"
+  — corrected before this design went anywhere near the payload file)
+  → confirmed across three different-length hostnames, since the
+  substitution mechanism (see below) needed to be length-independent,
+  not just correct for one test string.
+
+- **Java — not built.** This sandbox has a JRE (`java`) but no
+  compiler (`javac`) — there is no way to construct AND verify a custom
+  serialization gadget here the way the Python one was verified. A
+  pure-JDK equivalent exists in principle (`java.net.URL`-keyed
+  `HashMap`, same DNS-only mechanism, no third-party library required)
+  but building it blind, with no way to compile or round-trip it in
+  this environment, would be exactly the "plausible-sounding but
+  unverified technical artifact" this project's whole verification
+  culture exists to prevent. The alternative — fetching a pre-built
+  exploit-generation tool (ysoserial) to sidestep the missing compiler
+  — was considered and rejected: that is a materially different kind
+  of action than hand-authoring one narrow, well-documented,
+  safety-constrained technique, which is what every other payload in
+  this project (this one included) actually is.
+
+- **PHP — not built.** Not installed in this sandbox, and more
+  fundamentally not a coherent "universal" gadget the way Python's
+  `__reduce__` is: PHP object-injection payloads are inherently
+  target-library-specific (they depend on a particular class with an
+  exploitable `__wakeup`/`__destruct`/`__toString` on the *target's*
+  own classpath, which is exactly why tools like phpggc curate
+  per-framework chains rather than shipping one generic payload).
+  Nothing generic to author here without knowing the target's stack in
+  advance — unlike Python or Java's DNS-only primitives, there is no
+  narrow, safe, universally-applicable PHP equivalent to build.
+
+**This is a real, open coverage gap, recorded for review, not a
+silent omission** — flagged in `deserialization_payloads.json`'s own
+`_status` field (so it's visible to anyone reading the payload file
+directly, not only this log) and here. `test_no_java_or_php_entries`
+asserts the payload set is Python-only directly, rather than the gap
+only existing in prose that could drift from the code.
+
+**Placeholder-substitution, not `str.format()`, for the payload
+template — the pickle payload is binary, `oob_url` is only known at
+scan time:** the stored template embeds a literal `OOB_URL_PLACEHOLDER`
+baked in at authoring time; `_render_pickle_payload` base64-decodes,
+substitutes the placeholder at the **bytes** level, re-encodes. Safe
+specifically because pickle protocol 0's `UNICODE` opcode is
+newline-terminated, not length-prefixed — confirmed via
+`pickletools.dis` before relying on it, not assumed from general pickle
+familiarity. `test_handles_varying_hostname_lengths` exercises three
+different substituted lengths against the actual rendering function
+(not just the scratch verification above).
+
+**Query-parameter injection (like `cmd_injection.py`), not whole-body
+(like `xxe_scanner.py`):** `deserialization_payloads.json` is
+classified `injectable_payload` (Section 3.1), same category as
+CMDi/SSRF, and real-world insecure deserialization commonly arrives via
+a cookie or parameter carrying a serialized blob — parameter
+substitution fits this vuln_type's actual surface.
+`ExploitCandidate.parameter` is a real value, not `None` — not one of
+item 69's four no-parameter cases (confirmed, following the same
+per-scanner check XXE's entry (item 85) established, not skipped here
+because CMDi/SSRF already had real parameters).
+
+**Verification:** `tests/core/scanners/test_deserialization.py` —
+15/15 (new). Full suite: 1183/1183 (1168 + 15). `ci-scanner-http-check`:
+green.
+
+**Files this entry covers:** `core/scanners/deserialization.py` (new),
+`data/payloads/deserialization_payloads.json` (stub → 1 real entry,
+Python only — Java/PHP deliberately absent, see above),
+`tests/core/scanners/test_deserialization.py` (new, 15 tests).
+
+## 87. Batch 2 complete — all 5 scanners registered, full suite and both CI hooks re-verified together
+
+Closes out `ssrf_scanner`, `cmd_injection`, `xxe_scanner`,
+`deserialization`, `host_header` (items 83–86) as one integrated unit,
+same convention item 80 established for Batch 1.
+
+**All 10 scanners built so far (Batch 1 + Batch 2) import and register
+together with zero `SCANNER_REGISTRY` key collisions**, confirmed by
+importing all ten modules in one process and checking
+`SCANNER_REGISTRY` directly: `cmd_injection`, `deserialization`,
+`host_header`, `lfi_scanner`, `path_traversal`, `sqli_scanner`,
+`ssrf_scanner`, `ssti_scanner`, `xss_scanner`, `xxe_scanner` — exactly
+10 entries, no duplicates.
+
+**`interactsh_client: InteractshClient | None = None` — the naming pin
+Waild's item-82 approval required, confirmed across all five, not
+merely asserted once at item 83 and assumed to hold:** identical
+name/type/default/keyword-only-position in `ssrf_scanner.py` (item 83),
+`cmd_injection.py` (item 84), `xxe_scanner.py` (item 85),
+`deserialization.py` (item 86), and `host_header.py` (this batch's
+final entry) — each entry confirmed it independently against its own
+file, per Waild's directive, rather than the later four citing item 83
+and moving on.
+
+**`is_allowed_outbound` / `RateLimitedClient` — traced against all five
+scanners' actual mechanics, same conclusion every time:** no scanner in
+this batch needed a `RateLimitedClient` change. Every OOB/metadata/
+gadget/Host-header value each scanner sends is delivered as data (a
+query-parameter value, an XML body, a header) to the target endpoint
+itself — never a destination any of the five scanners' own `self.session`
+connects to directly. Item 71's Week-6 anticipation that "Week 7's
+CMDi/XXE/Deserialization/SSRF scanners... via `RateLimitedClient`"
+would need the interactsh/metadata exception does not materialize for
+any of them, once actually built and checked rather than assumed.
+
+**`payload_inventory.py` (Week 0) re-run against all 5 now-populated
+payload files** — clean, confirms the `_file_type` manifest check still
+satisfies and that populating real content (including
+`deserialization_payloads.json`'s intentionally partial — Python-only —
+content) did not break the schema Week 0 validated.
+
+**Full suite: 1198/1198** (1103 HEAD-b52d7c9 baseline + 5 item 82 +
+30 item 83 + 14 item 84 + 16 item 85 + 15 item 86 + 15 item 87 (this
+entry's own `test_host_header.py`)). Both CI hooks
+(`ci-scanner-http-check`, `ci-scope-diff`) green — no scanner file in
+this batch imports `httpx`/`requests` directly (all five route through
+`self.session`/`RateLimitedClient`, matching the Constitution's "ONE
+HTTP LAYER, NO EXCEPTIONS" mandate); no Go file touched this batch. Go
+suite: 32/32, re-run not assumed.
+
+**`probe_correlation_id` (item 69) — Batch 2 is the first batch that
+actually exercises it, confirmed to fit all five, not assumed from
+Batch 1's silence (prompt's own standing instruction for this batch):**
+holds the bare correlation ID (not the full `oob_url`) in all four
+scanners that use it (`ssrf_scanner`, `cmd_injection`, `xxe_scanner`,
+`deserialization`) — `host_header`'s OOB path uses it too, five for
+five. Derivation is identical everywhere it appears:
+`oob_url.removesuffix(INTERACTSH_SUFFIX)`, the same imported constant,
+never a re-typed literal.
+
+**`ExploitCandidate.parameter` (item 69) — the four-case no-parameter
+list is now five, confirmed per-scanner, not assumed:** `ssrf_scanner`,
+`cmd_injection`, `deserialization` all supply a real parameter value
+(query-parameter substitution, matching Batch 1's own shape). `xxe_
+scanner` (item 85) required extending item 69's original four-case list
+to five — a genuine finding, not anticipated before this batch.
+`host_header` (this batch's fifth) confirmed item 69's *original*
+Host-Header entry was already correct, needing no extension — the only
+one of the five where item 69's prior guess held exactly as written.
+
+**One coverage gap carried forward, not silently closed:**
+`deserialization.py`'s Java/PHP gadget coverage (item 86) — Python only
+is delivered; Java is blocked by this sandbox having no compiler
+(`javac`) and a deliberate decision not to fetch a pre-built
+exploit-generation tool to work around that; PHP has no installed
+runtime here and, more fundamentally, no target-agnostic universal
+gadget the way Python's `__reduce__` is one. Flagged in the payload
+file's own `_status` field and in item 86, not discovered later by
+diffing payload counts.
+
+**Files this entry covers:** none new — summary/verification entry
+over items 83–86's files.

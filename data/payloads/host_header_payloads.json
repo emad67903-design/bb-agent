@@ -2,6 +2,19 @@
   "_file_type": "injectable_payload",
   "_scanner": "host_header",
   "_notes": "Password reset poisoning",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside host_header",
-  "payloads": []
+  "_status": "Real payloads added Week 7 Batch 2 (docs/DECISIONS.md item 87). Schema: id, technique ('in_band_reflection' | 'oob'), payload_template (runtime-substituted -- {nonce} for in_band_reflection, a fresh secrets.token_hex(8) per probe; {oob_url} for the oob entry), expected. Two entries, matching Section 7.20's own two-technique text ('OOB callback or injected host in error/email') exactly -- see host_header.py module docstring.",
+  "payloads": [
+    {
+      "id": "host_reflection_marker",
+      "technique": "in_band_reflection",
+      "payload_template": "xbow-hh-{nonce}.example",
+      "expected": "The exact marker host reappears in the response body (differentially -- absent from the unmodified-Host baseline), e.g. in an error message, canonical link, or reflected redirect (Section 7.20: 'injected host in error/email')."
+    },
+    {
+      "id": "oob_callback",
+      "technique": "oob",
+      "payload_template": "{oob_url}",
+      "expected": "Interactsh callback received (Section 7.20: 'OOB callback'). {oob_url} substituted at runtime from InteractshClient.register_probe() -- used as a bare hostname (no URL scheme), since this is a Host header value, not a URL."
+    }
+  ]
 }
