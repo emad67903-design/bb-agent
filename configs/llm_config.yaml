@@ -18,8 +18,8 @@ gemini_input_token_cap: 1048576        # Section 2.5 / 8.4
 gemini_thinking_standard: 13000        # Section 2.5 / 8.4: STANDARD calls (chain+BA+BlueAgent)
 gemini_thinking_deep: 32768            # Section 2.5 / 8.4: DEEP calls (ExploitConfirmationAgent)
 
-groq_strategy_model: ""   # MUST SET; run scripts/verify_groq_models.py; no default (Section 3)
-groq_report_model: ""     # MUST SET; run scripts/verify_groq_models.py; no default (Section 3)
+groq_strategy_model: "openai/gpt-oss-120b"
+groq_report_model: "openai/gpt-oss-20b"
 
 # DEPRECATION ALERT (R-M6 fix):
 #   llama-3.1-8b-instant:     deprecated 2026-08-16
