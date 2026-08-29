@@ -2,6 +2,15 @@
   "_file_type": "injectable_payload",
   "_scanner": "prototype_pollution",
   "_notes": "__proto__/constructor.prototype probes",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside prototype_pollution",
-  "payloads": []
+  "_status": "Real payloads added Week 7 Batch 3 (docs/DECISIONS.md item 90). Schema: id, key_template -- the injected query-parameter NAME (not a value substituted into an existing one; see prototype_pollution.py module docstring). scan() appends key_template=<random marker> as a new parameter, then checks a clean follow-up request for the marker. Two entries, matching this file's own _notes ('__proto__/constructor.prototype probes') -- Section 7.15's prose names only the first.",
+  "payloads": [
+    {
+      "id": "dunder_proto",
+      "key_template": "__proto__[xbow_probe]"
+    },
+    {
+      "id": "constructor_prototype",
+      "key_template": "constructor[prototype][xbow_probe]"
+    }
+  ]
 }

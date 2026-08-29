@@ -40,21 +40,38 @@ protocol above should work as designed.
 
 ## 2. `/race` wire contract (services/race_engine/race.go)
 
-**Status:** documented addition, not a blueprint citation. Flagged for
-your review before Week 7 (`race_scanner.py`) becomes the actual caller.
+**Status:** documented addition, not a blueprint citation. **Reviewed
+and APPROVED this session — closed, not deferred to Batch 5.** Read in
+full by the project owner: scope-checked correctly, clean
+Go-transport-vs-Python-semantics separation mirroring the
+already-approved `/smuggle` pattern (item 3), sensible defaults.
 
 The blueprint specifies the `parallel` field and its default (30,
 Section 3) and the required evidence outputs (nanosecond timestamps,
 `success_count`, Section 7.5), but no full request/response JSON schema
 anywhere (confirmed by grep against the source blueprint: only
 `POST /race {"parallel": race_parallel, ...}` appears — the same gap
-class as `/smuggle`, resolved the same way, mirrored from your resolution
-for item 1: Go performs transport-only work (fire N concurrent requests,
-capture nanosecond timestamps, classify success via a caller-supplied
-`success_status_codes` allowlist); the actual expected-vs-vulnerable
-success-count verdict is left to `race_scanner.py`, since only it knows
-what a given target's "successful redemption" response looks like. Full
-schema and rationale: header comment in `services/race_engine/race.go`.
+class as `/smuggle`, resolved the same way, mirrored from your
+resolution for item 3 [**correction, caught while updating this entry
+for the approval above:** previously miscited as "item 1" here, which
+is GitHub authentication — unrelated. Item 3 is the `/smuggle` wire
+contract entry this sentence has always actually meant. Same defect
+class this document exists to prevent (a cross-reference drifting from
+what it points to); fixed at the point it was noticed, not left for a
+future reader to trip over]: Go performs transport-only work (fire N
+concurrent requests, capture nanosecond timestamps, classify success
+via a caller-supplied `success_status_codes` allowlist); the actual
+expected-vs-vulnerable success-count verdict is left to
+`race_scanner.py`, since only it knows what a given target's
+"successful redemption" response looks like. Full schema and rationale:
+header comment in `services/race_engine/race.go`.
+
+**Remaining, separately tracked — approving the wire contract does not
+resolve this:** `ExploitCandidate`'s `success_count`/`total` field gap
+(flagged at items 69/80/87's "standing instruction" checks) is still
+open. Proceeds as its own small pre-investigation whenever Batch 5
+begins, same shape as item 81's `InteractshClient` pre-investigation —
+per the project owner's own instruction, not assumed.
 
 ## 3. `/smuggle` wire contract (services/smuggling_engine/smuggling.go)
 
@@ -4131,3 +4148,311 @@ diffing payload counts.
 
 **Files this entry covers:** none new — summary/verification entry
 over items 83–86's files.
+
+## 88. `crlf_injection.py` — Batch 3's first scanner (Section 7.17)
+
+**Encoding verified empirically before writing any code, not assumed
+from general `urlencode()` familiarity:** the blueprint's own literal
+example (`%0d%0aX-XBOW-PROBE: 1`) is already percent-encoded prose.
+Storing that literal string as the payload would be encoded a SECOND
+time by `iter_query_param_injections`'s `urlencode()` call (`%` →
+`%25`), producing a harmless, non-functional payload. Confirmed
+directly: a payload holding a real `\r\n` character produces exactly
+one `%0D%0A` in the constructed URL — functionally identical to the
+blueprint's `%0d%0a` (percent-encoding hex digits are case-insensitive
+per RFC 3986). The payload file stores the real `\r\n` character
+(JSON's own `\r\n` escaping represents it losslessly); round-tripped
+through `json.load` and confirmed byte-for-byte before use.
+
+**Detection is header-based, not body-based** — `response.headers.get(...)
+== probe_header_value`, never a substring search over `response.text`.
+A CRLF sequence merely reflected in the response BODY as text is not
+proof of header injection; `test_header_reflected_in_body_only_is_not_a_
+signal` confirms a body-only reflection does not fire.
+
+**No `interactsh_client` declared** — Section 7.17 names no OOB
+technique, matching Batch 1's five scanners' own precedent (the
+parameter was pinned, item 83, specifically for the five scanners that
+need it — not retrofitted onto every scanner regardless of need).
+`test_no_interactsh_client_parameter` confirms this directly via
+`inspect.signature`, not left to prose alone.
+
+**Verification:** `tests/core/scanners/test_crlf_injection.py` — 10/10
+(new).
+
+**Files this entry covers:** `core/scanners/crlf_injection.py` (new),
+`data/payloads/crlf_payloads.json` (stub → 1 real entry),
+`tests/core/scanners/test_crlf_injection.py` (new, 10 tests).
+
+## 89. `open_redirect.py` — Batch 3's second scanner (Section 7.19); payload file classification caught 3 more variants Section 7.19's own prose doesn't mention
+
+**The catch this entry exists to record:** Section 7.19's prose gives
+exactly one literal example (`redirect=https://example.com`).
+`redirect_payloads.json`'s own stub `_notes` field — "Protocol-relative,
+javascript:, data:" (Section 3.1's table) — names three more variant
+types. Caught by reading the stub before assuming the prose was the
+complete payload set, the same discipline that caught XXE's/
+deserialization's own scope questions. All four variants
+(`https://example.com`, `//xbow-open-redirect-probe.example`,
+`javascript:void(0)`, a `text/plain` `data:` URI) share one detection
+check — only the payload string differs. The `javascript:`/`data:`
+entries use non-executing values (`void(0)`, `text/plain`) even though
+this scanner only ever inspects the `Location` header and never
+navigates anywhere — matching the project's general safe-by-
+construction habit at no cost.
+
+**Fixed marker, not randomized — a deliberate departure from
+`xss_scanner.py`/`host_header.py`'s own convention, reasoned rather
+than defaulted:** those scanners randomize because their check (does
+*any* trace of the marker appear anywhere in a response body) is loose
+enough that a fixed literal risks a coincidental match. This scanner's
+check is categorically stricter — the `Location` header must equal the
+exact payload just sent, on a genuine redirect status code — no
+legitimate `Location` value would coincidentally match any of these
+four literals on its own. `test_baseline_already_redirecting_there_
+produces_no_candidate` confirms the required `differential` evidence
+type (Section 7.19: `replay_stable + differential = 2`) is actually
+enforced, not just present in the evidence-type list.
+
+**"Auto-feeds `chain_engine`" (Section 7.19) is out of scope here** —
+that consumption is `chain_engine.py`'s own job, downstream of this
+scanner emitting a plain `ExploitCandidate` like every other scanner.
+Nothing in this file calls anything chain-related.
+
+**No `interactsh_client` declared**, same reasoning as item 88.
+
+**Verification:** `tests/core/scanners/test_open_redirect.py` — 11/11
+(new).
+
+**Files this entry covers:** `core/scanners/open_redirect.py` (new),
+`data/payloads/redirect_payloads.json` (stub → 4 real entries),
+`tests/core/scanners/test_open_redirect.py` (new, 11 tests).
+
+## 90. `prototype_pollution.py` — Batch 3's third scanner (Section 7.15); a new injection shape — appending a parameter, not substituting one
+
+**Two techniques, not Section 7.15's one prose example** — same catch
+class as item 89: `prototype_pollution_payloads.json`'s stub `_notes`
+("`__proto__`/`constructor.prototype` probes", Section 3.1) names both;
+the prose gives only `__proto__`.
+
+**The genuine architectural finding this entry exists to record:**
+every scanner built so far substitutes a payload into an EXISTING query
+parameter, or (XXE) replaces a whole body. Section 7.15's payload
+(`__proto__[xbow_probe]=12345`) is neither — it is itself a brand-new
+query parameter to be ADDED alongside whatever `target_url` already
+has. `_append_query_param` (new, local to this file) handles this; kept
+local rather than added to `param_injection.py` since only one scanner
+in this batch needs it — the same "don't build shared infrastructure
+ahead of a second, proven need" discipline `content_heuristics.py`'s
+own sharing (item 78) already established, applied in the opposite
+direction here (a genuine reason NOT to share yet).
+
+**`ExploitCandidate.parameter` = the injected key itself, NOT `None` —
+a considered judgment call, not a default:** unlike item 69's five
+no-single-parameter cases (none of which have ANY query/body parameter
+in the conventional sense), this payload IS structurally a query
+parameter — it has a name and a value and sits in the query string, it
+is just newly-added rather than substituted. A difference in injection
+mechanism, not a difference in whether a parameter exists to name. Not
+a sixth no-parameter case.
+
+**Behavioral verification uses a random marker, not the blueprint's
+literal `12345`:** two requests per payload — the polluted request,
+then a clean follow-up to the unmodified `target_url` with no pollution
+parameter at all. A random marker checked for in the clean follow-up is
+direct evidence of persistent, cross-request state pollution; a fixed
+literal like `12345` couldn't rule out coincidence with the same
+confidence, the same reasoning `host_header.py` (item 87) already
+established for its own marker.
+
+**No `interactsh_client` declared**, same reasoning as items 88–89.
+
+**Verification:** `tests/core/scanners/test_prototype_pollution.py` —
+12/12 (new).
+
+**Files this entry covers:** `core/scanners/prototype_pollution.py`
+(new), `data/payloads/prototype_pollution_payloads.json` (stub → 2 real
+entries), `tests/core/scanners/test_prototype_pollution.py` (new, 12
+tests).
+
+## 91. `cors_scanner.py` — Batch 3's fourth scanner (Section 7.11); no payload file by design, and a flagged `DEDUP_KEY` granularity limitation
+
+**No payload file — confirmed by design, not an oversight:** Section
+3.1's own note names `cors_scanner.py` (with `auth_scanner.py`) as
+using "header-level and state-machine analysis, not injected payloads.
+No payload file by design." No `cors_payloads.json` exists in
+`data/payloads/`, nor is one named in Section 3.1's 26-file table —
+confirmed directly, not assumed. This scanner's `__init__` takes no
+`payloads` parameter; `test_no_payloads_parameter` checks this via
+`inspect.signature`.
+
+**`parameter = None` already correctly anticipated by item 69,
+confirmed here, not a new finding** — same shape as `host_header.py`
+(item 87): item 69 already names CORS as one of its original four
+no-parameter cases ("Origin header, not a query/body parameter").
+
+**Four independent signals, matching Section 7.11's text exactly** —
+origin reflection, ACAC-with-reflection (a stricter version of signal
+1, firing as an additional candidate on the same response, not a
+standalone check), preflight bypass (`OPTIONS` + `Access-Control-
+Request-Method: PUT`), and null-origin acceptance (the literal string
+`"null"`, not randomizable — that IS the test). Random probe origin for
+signals 1/2/3 (not the blueprint's literal "evil.com" example), same
+false-positive-avoidance reasoning as `host_header.py`'s own marker.
+
+**A genuine `DEDUP_KEY` granularity limitation, flagged rather than
+worked around:** signals 1, 2, and 4 all produce `http_method="GET"`
+and `parameter=None` (unavoidable, per item 69, above) — three of
+CORS's four signals share an identical `(vuln_type, endpoint_path,
+http_method, parameter)` key on a given endpoint and would collapse
+under Section 6.9's dedup policy; only signal 3's `"OPTIONS"` method
+distinguishes it. Considered encoding the signal name into `parameter`
+purely to force distinctness, and rejected: that would misuse a field
+item 69 already established has no genuine value here, contradicting a
+previously-confirmed convention to paper over a reporting-granularity
+gap. Section 6.9's dedup policy merges same-key findings into one with
+richer evidence rather than discarding information, so the practical
+cost is reduced reporting distinctness, not lost detection — a real
+ontology gap, not a correctness bug. Left open for whoever next touches
+`DEDUP_KEY` or `ExploitCandidate`'s shape; not this scanner's to fix
+unilaterally.
+
+**No `interactsh_client` declared**, same reasoning as items 88–90.
+
+**Verification:** `tests/core/scanners/test_cors_scanner.py` — 15/15
+(new). One self-caught test bug along the way: an early draft of
+`test_each_scan_uses_a_distinct_random_origin` wrongly assumed every
+single request within one `scan()` call should carry a unique probe
+origin; the scanner correctly reuses one `probe_origin` across its GET
+and OPTIONS requests within a call (signals 1/2/3 all test the same
+injected origin) and only varies it ACROSS separate `scan()` calls.
+Caught by the test's own failure output, not the scanner's — fixed by
+correcting the test's assumption, not the scanner.
+
+**Files this entry covers:** `core/scanners/cors_scanner.py` (new), no
+payload file (by design, see above), `tests/core/scanners/
+test_cors_scanner.py` (new, 15 tests).
+
+## 92. `api_versioning.py` — Batch 3's fifth and final scanner (Section 7.24); a third injection shape, item 69's list extended to six, and a self-caught unused-parameter defect
+
+**A third distinct injection shape this project has now built** —
+neither query-parameter substitution, nor a newly-added parameter
+(item 90), nor a whole-body replacement (XXE, item 85). This scanner
+rewrites a URL PATH SEGMENT: finds a version marker in `target_url`'s
+path and constructs an alternate URL with the version number
+decremented by one.
+
+**`ExploitCandidate.parameter = None` — extends item 69's list to six,
+a second such finding this session (after XXE, item 85), found here,
+not assumed:** this technique touches a URL path segment, not a
+query/body parameter and not a header — none of item 69's five existing
+justifications describe a path segment, but the underlying reasoning is
+the same shape: no single query/body parameter in the conventional
+sense to name. Unlike CORS's four-signals-one-endpoint collision risk
+(item 91), this is not a `DEDUP_KEY` collision concern: `endpoint`
+(`target_url`, unchanged) already differs across different
+version-testable URLs, so the key stays distinct per finding even with
+`parameter` always `None`.
+
+**Self-caught defect, fixed before the file was considered done, not
+after:** a first draft accepted a `payloads` constructor parameter that
+`scan()` never actually read — the version-segment regex was a
+hardcoded Python constant instead. Noticed while reviewing the file
+against `api_versioning_payloads.json`'s own Section 3.1 classification
+(`injectable_payload`, NOT one of the two files Section 3.1 explicitly
+exempts) — a payload file the blueprint classifies as real but a
+scanner that never consumes it is exactly the kind of silent
+inconsistency this project's `_status`-field discipline exists to
+prevent. Fixed: the regex now lives in the payload file's own `pattern`
+field, read via `self._payloads` — config-driven (Engineering
+Constitution: "zero magic numbers"), genuinely exercised. One pattern
+entry, not several: `/v(\d+)/` is a substring search, not anchored to
+the path's start, so it already matches both `/v2/admin` and
+`/api/v2/admin`-shaped URLs — verified directly
+(`test_api_prefixed_v_segment_matches_via_substring`) before deciding a
+second pattern wasn't needed.
+
+**A second self-caught defect, unrelated to the first:** the module
+docstring's prose used an un-escaped `\d` inside a non-raw triple-
+quoted string, triggering a Python 3.12 `SyntaxWarning` on import (`\d`
+isn't a recognized escape sequence). Caught by running the file's
+import under `python3 -W error` — not by eyeballing — and fixed by
+escaping to `\\d`. All five of this batch's scanner files re-checked
+the same way afterward, not just this one, on the theory that a mistake
+found once is worth ruling out everywhere it could recur: all five
+import warning-free.
+
+**Two-part detection condition, matching Section 7.24's text
+precisely:** the given URL must itself return 403 first (nothing to
+bypass otherwise); only then does the alternate version's response get
+checked, with any non-403 status counting as the signal —
+`test_v2_denied_v1_also_denied_but_different_status_is_not_a_bypass`
+documents that a 404 (not just a 200) on the alternate counts, matching
+the literal "not 403" check rather than a narrower "grants 200"
+assumption nobody asked for.
+
+**One version step down only, not an exhaustive sweep** — Section
+7.24's text gives one example (`/v1/` bypassing `/v2/`'s denial); this
+tests exactly one step down, the same "don't invent unrequested
+variants" discipline XXE (item 85) already applied.
+
+**No `interactsh_client` declared**, same reasoning as items 88–91.
+
+**Verification:** `tests/core/scanners/test_api_versioning.py` — 15/15
+(new).
+
+**Files this entry covers:** `core/scanners/api_versioning.py` (new),
+`data/payloads/api_versioning_payloads.json` (stub → 1 real entry),
+`tests/core/scanners/test_api_versioning.py` (new, 15 tests).
+
+## 93. Batch 3 complete — all 5 scanners registered, full suite and both CI hooks re-verified together
+
+Closes out `crlf_injection`, `open_redirect`, `prototype_pollution`,
+`cors_scanner`, `api_versioning` (items 88–92) as one integrated unit,
+same convention items 80 and 87 established.
+
+**All 15 scanners built so far (Batch 1 + Batch 2 + Batch 3) import and
+register together with zero `SCANNER_REGISTRY` key collisions**,
+confirmed by importing all fifteen modules in one process and checking
+`SCANNER_REGISTRY` directly.
+
+**Three genuinely new injection shapes this batch introduced, on top of
+Batch 1/2's query-parameter-substitution and XXE's whole-body
+replacement:** appending a brand-new parameter
+(`prototype_pollution.py`), header-only with no payload file
+(`cors_scanner.py`), and URL-path-segment rewriting
+(`api_versioning.py`). Each reasoned through independently against its
+own actual mechanics, not forced into Batch 1/2's substitution shape
+for consistency's own sake.
+
+**`ExploitCandidate.parameter`'s no-single-parameter list grew by one
+this batch** (XXE, item 85, already extended it from four to five;
+`api_versioning.py`, item 92, extends it from five to six) — CORS and
+Host Header (both already in item 69's original four) needed no
+extension, confirmed rather than assumed, matching this project's
+standing "don't assume a prior batch's silence proves a case still
+holds" instruction generalized beyond `probe_correlation_id` to every
+recurring per-scanner field.
+
+**One real, flagged ontology gap carried forward, not silently
+closed:** `cors_scanner.py`'s `DEDUP_KEY` granularity limitation (item
+91) — three of CORS's four signals share an identical dedup key.
+Recorded for whoever next touches `DEDUP_KEY` or `ExploitCandidate`'s
+shape; not resolved unilaterally by this batch.
+
+**Two self-caught, self-fixed defects this batch, neither reaching a
+committed bundle:** `api_versioning.py`'s unused `payloads` parameter
+(item 92) and its module docstring's unescaped `\d` (item 92) — both
+caught by direct verification (reading the file against the payload
+file's own classification; running imports under `python3 -W error`),
+not eyeballing, and both fixed before this entry was written.
+
+**Full suite: 1261/1261** (1198 Batch-2-close baseline + 10 item 88 +
+11 item 89 + 12 item 90 + 15 item 91 + 15 item 92). Both CI hooks
+(`ci-scanner-http-check`, `ci-scope-diff`) green — no scanner file in
+this batch imports `httpx`/`requests` directly; no Go file touched this
+batch. Go suite: 32/32, re-run not assumed. `payload_inventory.py`:
+26 manifest entries, clean.
+
+**Files this entry covers:** none new — summary/verification entry
+over items 88–92's files.
