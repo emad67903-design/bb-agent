@@ -2,6 +2,12 @@
   "_file_type": "injectable_payload",
   "_scanner": "graphql_scanner",
   "_notes": "introspection, IDOR, batching",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside graphql_scanner",
-  "payloads": []
+  "_status": "Real payload added Week 7 Batch 4 (docs/DECISIONS.md item 98). Schema: id, technique ('batching' -- introspection and IDOR use fixed query strings defined directly in graphql_scanner.py, not payload-file-driven, since a GraphQL introspection query has one standard shape; see that file's module docstring), batch_size (batching entries only -- authored, modest, non-destructive; Section 7.23's text doesn't enumerate a specific count).",
+  "payloads": [
+    {
+      "id": "batch_size_probe",
+      "technique": "batching",
+      "batch_size": 25
+    }
+  ]
 }

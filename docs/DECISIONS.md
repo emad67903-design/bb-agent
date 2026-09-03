@@ -4456,3 +4456,409 @@ batch. Go suite: 32/32, re-run not assumed. `payload_inventory.py`:
 
 **Files this entry covers:** none new — summary/verification entry
 over items 88–92's files.
+
+## 94. `mass_assignment.py` — Batch 4's first scanner (Section 7.26)
+
+**A fourth injection shape: whole-JSON-body with a baseline-plus-extra-
+field structure**, closer to `xxe_scanner.py`'s whole-body shape than
+Batch 1/2's substitution pattern, but unlike XXE's single fixed
+payload, this scanner constructs the body itself each time — a
+randomized baseline `username` field plus one extra, privilege-shaped
+field per payload entry.
+
+**Four privilege-escalation field names** (`isAdmin`, `is_admin`,
+`role`, `verified`), not just Section 7.26's one literal example —
+authored, same coverage-uncertainty justification as `cmd_injection.py`'s
+separator/OS variants (item 84): the uncertainty is which naming
+convention the target uses internally, not an invented extension of a
+singular technique.
+
+**Randomized baseline field, not the blueprint's literal `"test"`** —
+avoids unwanted side effects (duplicate-key/"already exists" errors) on
+a repeatedly-scanned real target.
+
+**Detection parses JSON first, falls back to string matching only for
+non-JSON responses** — robust to whitespace/key-ordering variation,
+verified directly against both cases before relying on it.
+
+**`ExploitCandidate.parameter` = the extra field's name, not `None`** —
+same reasoning as `prototype_pollution.py` (item 90): the field IS
+structurally a JSON body field with a name and a value, just newly-
+added rather than substituted.
+
+**Verification:** `tests/core/scanners/test_mass_assignment.py` — 15/15
+(new).
+
+**Files this entry covers:** `core/scanners/mass_assignment.py` (new),
+`data/payloads/mass_assignment_payloads.json` (stub → 4 real entries),
+`tests/core/scanners/test_mass_assignment.py` (new, 15 tests).
+
+## 95. `jwt_scanner.py` — Batch 4's second scanner (Section 7.13); PyJWT added as a real dependency, RS256→HS256 flagged as a genuine gap
+
+**Two of three named techniques built; RS256→HS256 confusion
+investigated and flagged, not skipped silently.** `alg:none` and
+weak-secret guessing are self-contained (they only need a token already
+found). RS256→HS256 confusion fundamentally requires the target's RSA
+public key (JWKS-endpoint discovery, PEM/JWK parsing) — infrastructure
+this project doesn't have. Not approximated with a guessed key: unlike
+weak-secret guessing, where a curated wordlist of commonly-reused
+literal secrets is well-established real-world practice, there's no
+comparable "commonly-reused RSA public key" list to draw from.
+
+**PyJWT added as a real dependency (`requirements.txt`) — a different
+call than the ysoserial decision (item 86), reasoned through
+separately, not defaulted from precedent.** PyJWT is a boring,
+standard encode/decode library — the JWT equivalent of `httpx` for
+HTTP — not an exploit-generation tool; it provides no "attack"
+capability of its own, this file still decides what claims to forge and
+which secrets to try. Verified directly before adding it: `jwt.encode`/
+`get_unverified_header`/`decode` round-tripped against real HS256
+tokens, confirming a weak-secret guess matching the real signing secret
+produces a token that verifies successfully against that secret.
+
+**Self-contained JWT discovery, the same test-account/session gap
+already flagged for the "Batch 7" scanners, worked around in
+miniature:** `scan(target_url: str)` has no way to receive an existing
+valid JWT as input. This scanner treats `target_url` as a candidate
+token-issuing endpoint, searches its response body and `Set-Cookie`
+header for a JWT-shaped string, and validates the match with an actual
+decode attempt — verified directly against both a real token and
+deliberately non-JWT dotted text (`"1.2.3"`, `"some.dotted.text"`)
+before trusting the regex alone.
+
+**Replay target is `target_url` itself — an imperfect approximation,
+flagged rather than oversold**, requiring the unauthenticated baseline
+to already be 401/403 before counting anything as a bypass (the same
+"baseline must show it's actually gated" shape `api_versioning.py`,
+item 92, established).
+
+**Weak-secret gated on the discovered token's own `alg` being
+`HS256`** — re-signing with a guessed secret is only a meaningful test
+if the token was HMAC-signed to begin with; `alg:none` is attempted
+regardless of the original algorithm.
+
+**`ExploitCandidate.parameter = None`** — a seventh extension to item
+69's list: this technique injects via the `Authorization` header, the
+same shape CORS's `Origin` and Host Header's `Host` already have — not
+`auth_scanner.py`'s own "Auth" case (Section 7.27, a different,
+not-yet-built scanner), a distinct finding for this scanner.
+
+**Verification:** `tests/core/scanners/test_jwt_scanner.py` — 17/17
+(new). One test-only bug caught and fixed along the way: an early
+attempt to construct an RS256 test token called a nonexistent PyJWT
+convenience method (`jwt.algorithms.RSAAlgorithm.generate_key`); fixed
+to generate the key via the `cryptography` library directly (already a
+PyJWT dependency, so no new package needed).
+
+**Files this entry covers:** `core/scanners/jwt_scanner.py` (new),
+`data/payloads/jwt_payloads.json` (stub → 6 real entries: 1 `alg_none`
++ 5 `weak_secret`), `requirements.txt` (`pyjwt` added),
+`tests/core/scanners/test_jwt_scanner.py` (new, 17 tests).
+
+## 96. `rate_limited_client.py` gains `credential_validation_allowlist` — a real, pre-existing infrastructure gap closed before `hardcoded_credentials.py` could be built
+
+**The gap, found by tracing `is_allowed()`'s exemption all the way
+down before writing any scanner code, not assumed working:**
+`is_allowed()` (Section 4.4/R-H4) has always taken an explicit
+`credential_validation_allowlist` parameter. `RateLimitedClient`'s own
+`caller_id` docstring already said the parameter existed "for the
+`credential_validation_allowlist` exemption... reserved for Week 6" —
+but `request()` never actually passed one to `is_allowed()`, so the
+exemption was unreachable through this class regardless of `caller_id`
+being correct. The same "anticipated in a docstring, never wired up"
+shape `is_allowed_outbound` turned out to have for `ssrf_scanner.py`
+(item 83) — except here, unlike `is_allowed_outbound` (which turned out
+not to be needed once traced through), the fix genuinely is required:
+`hardcoded_credentials.py` cannot reach any external validation API
+without it.
+
+**Fix: `RateLimitedClient.__init__` now accepts
+`credential_validation_allowlist: CredentialValidationAllowlist | None
+= None`, stored and passed to `is_allowed()` on every `request()`
+call.** `None` remains the default — every existing caller of this
+class is unaffected, confirmed by re-running this file's own 17
+pre-existing tests, plus the full 1299-test suite, unmodified before
+and after.
+
+**Verification:** `tests/core/http/test_rate_limited_client.py` — 17
+pre-existing (confirmed identical) + 6 new
+(`TestRateLimitedClientCredentialValidationAllowlist`), covering:
+correct `caller_id` + enabled allowlist permits an out-of-scope host;
+wrong `caller_id` still blocks even with an enabled allowlist; correct
+`caller_id` but disabled allowlist blocks; correct `caller_id` but host
+not in `external_apis` blocks; no allowlist provided defaults to `None`
+and blocks (existing behavior, unaffected); an in-scope host is
+unaffected by the allowlist's mere presence. Full suite: 1299/1299
+(1261 Batch-3-close baseline + 15 `mass_assignment.py` + 17 `jwt_
+scanner.py`, both already built by this point in the batch, + 6 new
+here — this arithmetic re-verified in Python before being written, not
+eyeballed, after an early draft of item 100's own summary got the
+equivalent sum wrong and had to be corrected there too).
+
+**Files this entry covers:** `core/http/rate_limited_client.py`
+(constructor + `request()` + module docstring), `tests/core/http/
+test_rate_limited_client.py` (`_client` helper extended, 6 new tests
+in a new class, all 17 pre-existing tests unmodified).
+
+## 97. `hardcoded_credentials.py` — Batch 4's third scanner (Section 7.28); `caller_id` gating treated with the rigor Waild's directive required, live validation for 2 of 4 detectable providers, and Microsoft Graph excluded after checking current documentation caught a fabricated pattern
+
+**The `caller_id` requirement, proven end-to-end, not just asserted:**
+this scanner never types the literal string `"hardcoded_credentials"`
+anywhere — it reads `self.session.caller_id` (already correct via
+`create_scanner`'s existing `caller_id=scanner_id` wiring, item 82) and
+reuses it verbatim when constructing its own internal validation
+client (`self._validation_session`). One source of truth —
+`SCANNER_REGISTRY`'s own key — never re-typed as a second literal that
+could drift from it, item 22's 29-vs-28 list-drift precedent applied
+directly. `test_validation_session_caller_id_matches_injected_session_
+exactly` and `test_wrong_caller_id_blocks_validation_even_with_enabled_
+allowlist` prove this through the real `RateLimitedClient`/
+`is_allowed()` stack (item 96), not a mock of the gating logic.
+
+**Two sessions, deliberately:** `self.session` (injected, scoped to
+the target's domains) fetches the JS being scanned; a second,
+internally-constructed `RateLimitedClient`
+(`scope_domains=[]`) makes external validation calls. Empty
+`scope_domains` is a deliberate safety property: with nothing in normal
+scope, this client can ONLY ever reach a host via the
+`credential_validation_allowlist` exemption — it structurally cannot be
+misused to reach the target's own domains, even by a future bug in this
+file. `test_validation_session_has_empty_scope_domains` confirms this
+directly.
+
+**Live validation for 2 of 4 detectable providers (Stripe, Google
+Maps); AWS and Twilio pattern-matched but unvalidated; Microsoft Graph
+has no pattern at all — each gap individually investigated:** Stripe
+and Google Maps use a single bearer/query-string key — a plain GET
+either succeeds or doesn't, safely implementable, both endpoints
+confirmed GET-only and read-only before use. AWS requires SigV4 request
+signing AND a paired secret access key (a single regex match on an
+access key ID alone cannot authenticate anything). Twilio needs a
+paired Account SID + Auth Token located near each other in the same
+JS — a "find related values together" pattern this file's simple
+per-pattern scan doesn't attempt. Both AWS and Twilio still surface as
+findings on a bare pattern match, matching Section 7.28's own TIER_D
+fallback text — `payload_used` says plainly that validation wasn't
+attempted and why, since neither TIER_D assignment nor `TelegramBot`
+exist yet for this scanner to actually hand off to.
+
+**Microsoft Graph: a mistake caught by checking current documentation
+before shipping, not by luck.** An early draft's pattern required a
+literal `"8Q~"` substring. Web search against Microsoft's own current
+Sensitive Information Type documentation and a gitleaks maintainer
+thread (Oct 2024) established two things: (1) Microsoft's own
+illustrative example credential contains `"7Q~"`, not `"8Q~"` — the
+draft pattern was almost certainly a garbled half-memory of that
+example, mistaken for a real structural signature; (2) even the
+correct broad pattern (Microsoft's own documented `[-_.~a-zA-Z0-9]`,
+"up to 40 characters") is one the wider secret-scanning community has
+explicitly not converged on a more specific version of either. Rather
+than ship a broad, high-false-positive pattern with a vague caveat,
+Graph detection is left out of `hardcoded_credentials_patterns.json`
+entirely — confirmed by `test_real_pattern_file_has_four_entries_not_
+five` and `test_no_bogus_8q_tilde_substring_anywhere`, not merely
+described in prose.
+
+**Known placeholder exclusion** (AWS's own documented example key,
+`AKIAIOSFODNN7EXAMPLE`) prevents flagging harmless, widely-copied
+documentation examples.
+
+**`ExploitCandidate.parameter = None`** — an eighth extension to item
+69's list: this scanner injects nothing at all, it passively scans
+fetched content, with no query/body parameter and no header involved.
+
+**Verification:** `tests/core/scanners/test_hardcoded_credentials.py` —
+17/17 (new), including full end-to-end proof (real `RateLimitedClient`
++ real `is_allowed()`, not mocked) that a `credential_validation_
+allowlist`-carrying validation session genuinely reaches
+`api.stripe.com` despite `scope_domains=[]`.
+
+**Files this entry covers:** `core/scanners/hardcoded_credentials.py`
+(new), `data/payloads/hardcoded_credentials_patterns.json` (stub → 4
+real entries, `patterns` key not `payloads` — `pattern_library` schema,
+Section 3.1), `tests/core/scanners/test_hardcoded_credentials.py` (new,
+17 tests).
+
+## 98. `graphql_scanner.py` — Batch 4's fourth scanner (Section 7.23)
+
+**Three techniques, matching Section 7.23's text exactly.**
+Introspection and IDOR-schema-discovery share one request (a single
+rich introspection query asking for `queryType`, `types`, `fields`, and
+each field's `args`), not two — simpler control flow, and Fast Lane
+doesn't need to economize one extra field in an already-cheap request
+the way it needs to economize whole HTTP round-trips.
+
+**IDOR via ID queries is schema-discovered, not guessed, and
+self-contained the same way `jwt_scanner.py` (item 95) is:** real
+GraphQL IDOR testing compares two different accounts' access to the
+same object; this project has no test-account infrastructure yet. This
+technique instead finds any query-type field with an `id` argument via
+introspection and queries it with two different ID values under
+whatever session `self.session` already carries, selecting only the
+universal `__typename` meta-field so no knowledge of the field's actual
+return type is needed — a weaker, single-session approximation of true
+cross-account IDOR, flagged as such rather than oversold, verified
+directly (`_find_id_query_field` tested against a schema with a
+matching field, one without, and a disabled-introspection response).
+
+**Batching abuse also uses `__typename`, not a destructive probe** —
+sends a JSON-array batch of harmless queries at an authored, modest
+size and checks whether the server processed the full batch rather
+than rejecting or truncating it.
+
+**`ExploitCandidate.parameter` differs by technique within this one
+scanner:** introspection and batching are whole-body techniques with no
+distinguishable parameter (`None`, the same shape XXE/
+`api_versioning.py`/`jwt_scanner.py`/`hardcoded_credentials.py` already
+have — a ninth extension to item 69's list, but only for these two of
+three signals). The IDOR-via-ID signal has a genuine, nameable thing
+being tested — the discovered field name — the same "newly-discovered
+but still a real name" reasoning `prototype_pollution.py`/
+`mass_assignment.py` already established.
+
+**Verification:** `tests/core/scanners/test_graphql_scanner.py` —
+16/16 (new).
+
+**Files this entry covers:** `core/scanners/graphql_scanner.py` (new),
+`data/payloads/graphql_payloads.json` (stub → 1 real entry — batching
+only; introspection/IDOR use fixed query strings, not payload-file-
+driven content), `tests/core/scanners/test_graphql_scanner.py` (new,
+16 tests).
+
+## 99. `oauth_scanner.py` — Batch 4's fifth and final scanner (Section 7.14); a self-caught design bug in the acceptance check, not just a test-authoring mistake this time
+
+**redirect_uri manipulation and token leakage are one probe, two
+possible signals, read together per Section 7.14's own "Safe exploit"
+line**, which describes exactly what "token leakage" means
+operationally: the code/token following an accepted, attacker-
+controlled `redirect_uri`. `_has_oauth_response_params` checks Location
+for `code`/`access_token`/`token` as real parsed query/fragment KEYS
+via `urllib.parse`, not a substring search — verified directly that a
+param merely named `statuscode` doesn't false-positive on the substring
+`code` before relying on it.
+
+**Three `redirect_uri` variants** — a plain attacker URL, and two
+well-documented real-world bypasses of naive prefix/substring
+`redirect_uri` validation (an `@`-trick and a subdomain-suffix trick,
+both built from `target_url`'s own extracted host) — authored, same
+coverage-uncertainty justification as `cmd_injection.py`'s separator/OS
+variants.
+
+**Only `redirect_uri` is tested, not every existing query parameter —
+a deliberate departure from `open_redirect.py`'s broader approach
+(item 89), not a narrower shortcut:** `open_redirect.py` tests every
+parameter because Section 7.19 names its examples as just that,
+examples. OAuth's `redirect_uri` is a standardized parameter name (RFC
+6749) with no equivalent naming uncertainty — testing only it is the
+more precise choice.
+
+**A real design bug, caught by my own test, not a test-authoring
+mistake:** a first draft copied `open_redirect.py`'s `location ==
+payload` exact-match check. That's correct for `open_redirect.py`,
+where a bare redirect is the whole signal, but wrong here — a
+genuinely leaking OAuth response NECESSARILY appends `?code=...` or
+`#access_token=...` to the injected `redirect_uri`, so `location` could
+never equal the bare payload exactly in the exact scenario this
+scanner most needs to catch. `test_accepted_redirect_uri_with_code_
+produces_two_candidates` (written to prove leakage detection) failed
+against the exact-match version with 0 candidates instead of 2 — that
+failure is what caught it, not a code review. Fixed to `location.
+startswith(payload)`, safe here specifically because `payload` is this
+scanner's own just-injected value, not an untrusted external string
+being matched against something else.
+
+**State absence only; state reuse not attempted — a real, flagged gap,
+same test-flow-state shape already flagged for `jwt_scanner.py` (item
+95) and the "Batch 7" scanners:** "state absence" is a single-request
+comparison (the authorization URL with `state` removed, checked
+against baseline), directly testable. "State reuse" requires completing
+an authorization flow and replaying the same `state` value across a
+second, separate attempt — multi-step flow tracking this project has no
+infrastructure for. Not approximated with a single-request check that
+would prove nothing about actual reuse.
+
+**`ExploitCandidate.parameter` is a real value for both techniques, no
+extension to item 69's list needed** — `redirect_uri` and `state` are
+both genuine, named query parameters, fitting Batch 1/2's original
+shape cleanly, unlike several of this session's other Batch 3/4
+scanners.
+
+**Verification:** `tests/core/scanners/test_oauth_scanner.py` — 20/20
+(new, after the startswith fix; 19/20 before it, with the one failure
+being the design bug above, not a flaky or incorrect test).
+
+**Files this entry covers:** `core/scanners/oauth_scanner.py` (new),
+`data/payloads/oauth_payloads.json` (stub → 3 real entries),
+`tests/core/scanners/test_oauth_scanner.py` (new, 20 tests).
+
+## 100. Batch 4 complete — all 5 scanners registered, full suite and both CI hooks re-verified together
+
+Closes out `mass_assignment`, `jwt_scanner`, `hardcoded_credentials`,
+`graphql_scanner`, `oauth_scanner` (items 94–99), plus the
+`rate_limited_client.py` infrastructure fix (item 96) that made item
+97 possible, as one integrated unit — same convention items 80, 87,
+and 93 established.
+
+**All 20 scanners built so far (Batches 1–4) import and register
+together with zero `SCANNER_REGISTRY` key collisions**, confirmed by
+importing all twenty modules in one process and checking
+`SCANNER_REGISTRY` directly.
+
+**One real, pre-existing infrastructure gap found and closed before
+the scanner that needed it could be built** (item 96) — the same
+"anticipated in a docstring, never wired up, caught by the first real
+caller" shape `is_allowed_outbound` had for `ssrf_scanner.py` (item
+83), except here the fix genuinely was needed once traced through,
+unlike `is_allowed_outbound`. `RateLimitedClient` now correctly carries
+`credential_validation_allowlist` through to `is_allowed()`, proven via
+6 new tests plus the full pre-existing suite re-run unmodified.
+
+**One real dependency added, reasoned through independently of the
+ysoserial precedent** (item 95, PyJWT) — a boring, standard encode/
+decode library, not an exploit-generation tool, verified against real
+tokens before being trusted.
+
+**Two provider/technique gaps investigated and flagged rather than
+faked** (item 95's RS256→HS256 confusion, item 97's AWS/Twilio
+validation and Microsoft Graph detection) — each with its own
+independently-reasoned cause (missing JWKS-discovery infrastructure;
+missing SigV4 signing and paired-secret discovery; a pattern the wider
+security community itself hasn't converged on), not a single blanket
+excuse reused across all of them.
+
+**`ExploitCandidate.parameter`'s no-single-parameter list grew by three
+this batch** (`jwt_scanner.py`, item 95 — 7th; `hardcoded_credentials.py`,
+item 97 — 8th; `graphql_scanner.py`'s introspection/batching signals,
+item 98 — 9th) — `mass_assignment.py` and `oauth_scanner.py` both
+confirmed they fit the ORIGINAL substitution/addition shapes cleanly,
+needing no extension, checked per-scanner rather than assumed.
+
+**One design bug (not a test-authoring mistake) caught by a test
+written to prove the thing it ended up disproving** (`oauth_scanner.py`,
+item 99) — the clearest example this batch of the project's own
+standing principle that bugs get caught before commit, by running code,
+not by review.
+
+**One incidental repository-hygiene gap found and fixed while preparing
+this batch's commit, unrelated to any scanner's own logic:**
+`data/telemetry/large_bodies/` (Section 10.5's own documented
+`InterceptingClient` output directory for response bodies over the 8 KB
+cap) was untracked by `.gitignore` — never triggered by any prior
+batch's tests, first triggered here by this batch's own 2000-character
+filler strings used to test `raw_response_snapshot` truncation across
+several scanners. `.gitignore` now covers `data/telemetry/`.
+
+**Full suite: 1352/1352** (1261 Batch-3-close baseline + 15 item 94 +
+17 item 95 + 6 item 96 + 17 item 97 + 16 item 98 + 20 item 99 — this
+breakdown itself re-computed and verified before being written here: an
+earlier draft of this sentence gave a wrong baseline figure and omitted
+item 96's 6 tests as their own term, summing to 1368, not 1352; caught
+by actually running the arithmetic in Python against the real recorded
+test counts from each item's own verification, not by re-reading the
+sentence). Both CI hooks (`ci-scanner-http-check`, `ci-scope-diff`)
+green — no scanner file in this batch imports `httpx`/`requests`
+directly; no Go file touched this batch. Go suite: 32/32, re-run not
+assumed. `payload_inventory.py`: 26 manifest entries, clean.
+
+**Files this entry covers:** none new — summary/verification entry
+over items 94–99's files.

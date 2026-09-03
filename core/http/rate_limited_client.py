@@ -45,6 +45,26 @@ decisions" -- it is a hard wait enforced in code, not a policy a caller
 could reason around -- and it is directly, deterministically testable
 (inject a fake clock/sleep function) without needing a burst-capacity
 concept the blueprint never mentions.
+
+`credential_validation_allowlist` NOW ACCEPTED AND CARRIED (docs/
+DECISIONS.md item 96) -- A REAL, PRE-EXISTING GAP CLOSED, NOT A NEW
+FEATURE INVENTED: `is_allowed()` (Section 4.4/R-H4) has always taken an
+explicit `credential_validation_allowlist` parameter for its
+`hardcoded_credentials.py` exemption, and this class's own `caller_id`
+docstring already said the parameter existed "for the
+`credential_validation_allowlist` exemption... reserved for Week 6" --
+but `request()` never actually passed one to `is_allowed()`, so the
+exemption was unreachable through this class regardless of `caller_id`
+being correct. Found while building `hardcoded_credentials.py` (Week 7
+Batch 4), the first caller that actually needs it -- the same
+"anticipated in a docstring, never wired up, caught by the first real
+caller" shape `is_allowed_outbound` turned out to have for
+`ssrf_scanner.py` (item 83), except here the fix genuinely is needed
+(unlike `is_allowed_outbound`, which turned out not to be, once
+traced through). `None` remains the default, so every existing caller
+of this class is unaffected -- confirmed by re-running every
+pre-existing test in this file and every scanner's own test suite
+unmodified before and after this change.
 """
 
 from __future__ import annotations
@@ -58,6 +78,7 @@ import httpx
 
 from core.governance.scope_enforcer import is_allowed
 from core.http.intercepting_client import InterceptingClient, TrafficLogStore
+from core.ontology.scope import CredentialValidationAllowlist
 
 
 class OutOfScopeError(Exception):
@@ -124,12 +145,12 @@ class RateLimitedClient:
             YAML per call would reproduce the exact per-call-cost
             problem `caller_id` was introduced to avoid).
         caller_id: This client's identity for the `credential_validation_allowlist`
-            exemption (Section 4.4), reserved for Week 6. Set once at
-            construction and carried for the client's lifetime -- never
-            re-derived via call-stack inspection (Section 4.4's explicit
-            rejection of that approach). `None` if this client has no
-            special exemption (every caller other than
-            `hardcoded_credentials.py`, per Section 4.4).
+            exemption (Section 4.4). Set once at construction and
+            carried for the client's lifetime -- never re-derived via
+            call-stack inspection (Section 4.4's explicit rejection of
+            that approach). `None` if this client has no special
+            exemption (every caller other than `hardcoded_credentials.py`,
+            per Section 4.4).
         intercepting_client: The `InterceptingClient` to wrap. Defaults
             to a fresh one.
         requests_per_second: Passed to the internal `RateLimiter` if
@@ -139,6 +160,15 @@ class RateLimitedClient:
             (and its per-host state) across multiple `RateLimitedClient`
             instances, or for test injection. Defaults to a fresh
             `RateLimiter(requests_per_second)`.
+        credential_validation_allowlist: The `credential_validation_
+            allowlist` exemption data (Section 4.4/R-H4), normally
+            loaded once via `core.governance.scope_config_generator.
+            load_credential_validation_allowlist` and carried by the
+            caller, mirroring how `scope_domains` itself is loaded once
+            and carried. `None` (the default) means this client never
+            offers the exemption -- correct for every caller except
+            `hardcoded_credentials.py`'s own dedicated validation
+            client (see that scanner's module docstring).
     """
 
     def __init__(
@@ -149,11 +179,13 @@ class RateLimitedClient:
         intercepting_client: InterceptingClient | None = None,
         requests_per_second: float = 10.0,
         rate_limiter: RateLimiter | None = None,
+        credential_validation_allowlist: CredentialValidationAllowlist | None = None,
     ) -> None:
         self._scope_domains = scope_domains
         self._caller_id = caller_id
         self._client = intercepting_client if intercepting_client is not None else InterceptingClient()
         self._rate_limiter = rate_limiter if rate_limiter is not None else RateLimiter(requests_per_second)
+        self._credential_validation_allowlist = credential_validation_allowlist
 
     @property
     def caller_id(self) -> str | None:
@@ -187,7 +219,12 @@ class RateLimitedClient:
             OutOfScopeError: If `url`'s host is not in scope (Section
                 10.2: hard gate, checked before every request).
         """
-        if not is_allowed(url, self._scope_domains, caller_id=self._caller_id):
+        if not is_allowed(
+            url,
+            self._scope_domains,
+            caller_id=self._caller_id,
+            credential_validation_allowlist=self._credential_validation_allowlist,
+        ):
             raise OutOfScopeError(f"RateLimitedClient blocked: {url}")
 
         host = urllib.parse.urlparse(url).hostname or ""

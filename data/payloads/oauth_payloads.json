@@ -2,6 +2,22 @@
   "_file_type": "injectable_payload",
   "_scanner": "oauth_scanner",
   "_notes": "redirect_uri, state, leakage",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside oauth_scanner",
-  "payloads": []
+  "_status": "Real payloads added Week 7 Batch 4 (docs/DECISIONS.md item 99). Schema: id, technique ('redirect_uri_variant' for all three entries), payload_template (runtime-substituted with {target_host}, extracted from target_url itself). Three variants -- authored, same coverage-uncertainty justification as cmd_injection.py's separator/OS variants; see oauth_scanner.py module docstring's 'THREE redirect_uri VARIANTS' section. State absence is tested directly in oauth_scanner.py (no payload-file-driven content needed -- the technique is removing an existing parameter, not injecting a new value).",
+  "payloads": [
+    {
+      "id": "plain_attacker_url",
+      "technique": "redirect_uri_variant",
+      "payload_template": "https://xbow-oauth-probe.example"
+    },
+    {
+      "id": "at_sign_trick",
+      "technique": "redirect_uri_variant",
+      "payload_template": "https://{target_host}@xbow-oauth-probe.example"
+    },
+    {
+      "id": "subdomain_suffix_trick",
+      "technique": "redirect_uri_variant",
+      "payload_template": "https://xbow-oauth-probe.example/{target_host}"
+    }
+  ]
 }
