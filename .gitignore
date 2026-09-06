@@ -6,3 +6,4 @@ __pycache__/
 services/race_engine/race_engine
 services/smuggling_engine/smuggling_engine
 .env
+data/telemetry/

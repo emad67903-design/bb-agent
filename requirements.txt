@@ -31,6 +31,21 @@ httpx>=0.27,<1.0        # Week 5: core/http/intercepting_client.py -- the
                         # ONE sanctioned place this project imports httpx
                         # directly (base_scanner.py's CI hook bans it
                         # everywhere under core/scanners/).
+pyjwt>=2.7,<3.0          # Week 7 Batch 4: core/scanners/jwt_scanner.py.
+                        # Encode/decode only (docs/DECISIONS.md item 95) --
+                        # this is a boring, standard JWT library, the JWT
+                        # equivalent of httpx for HTTP, not a security-bypass
+                        # tool: it provides no "attack" capability of its own,
+                        # jwt_scanner.py still decides what claims/algorithm
+                        # to forge. Chosen over a hand-rolled base64/HMAC
+                        # implementation specifically to avoid subtle
+                        # encode/decode correctness bugs a battle-tested
+                        # library wouldn't have -- verified directly
+                        # (jwt.encode/get_unverified_header/decode
+                        # round-tripped against real HS256 tokens, including
+                        # confirming a weak-secret guess that matches the
+                        # real signing secret produces a token that verifies
+                        # successfully) before this line was added.
 
 # --- dev / test only ---
 pytest>=8.0,<9.0

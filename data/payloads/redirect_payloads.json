@@ -2,6 +2,23 @@
   "_file_type": "injectable_payload",
   "_scanner": "open_redirect",
   "_notes": "Protocol-relative, javascript:, data:",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside open_redirect",
-  "payloads": []
+  "_status": "Real payloads added Week 7 Batch 3 (docs/DECISIONS.md item 89). Schema: id, payload. Section 7.19's prose gives one literal example (a standard absolute URL); Section 3.1's own payload-file classification for this exact file names three MORE variant types ('Protocol-relative, javascript:, data:') -- caught by reading this stub's own _notes field before assuming Section 7.19's prose was the complete payload set, not after. All four use the identical detection check (Location header exact-matches the injected payload) -- only the payload string differs.",
+  "payloads": [
+    {
+      "id": "absolute_url",
+      "payload": "https://example.com"
+    },
+    {
+      "id": "protocol_relative",
+      "payload": "//xbow-open-redirect-probe.example"
+    },
+    {
+      "id": "javascript_uri",
+      "payload": "javascript:void(0)"
+    },
+    {
+      "id": "data_uri",
+      "payload": "data:text/plain,xbow-open-redirect-probe"
+    }
+  ]
 }

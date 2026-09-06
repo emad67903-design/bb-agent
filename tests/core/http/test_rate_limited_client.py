@@ -11,6 +11,7 @@ import pytest
 
 from core.http.intercepting_client import InterceptingClient
 from core.http.rate_limited_client import OutOfScopeError, RateLimitedClient, RateLimiter
+from core.ontology.scope import CredentialValidationAllowlist
 
 
 class _FakeClock:
@@ -84,12 +85,15 @@ class TestRateLimiter:
 
 
 class TestRateLimitedClient:
-    def _client(self, *, scope_domains, caller_id=None, handler=None, rate_limiter=None) -> RateLimitedClient:
+    def _client(
+        self, *, scope_domains, caller_id=None, handler=None, rate_limiter=None, credential_validation_allowlist=None
+    ) -> RateLimitedClient:
         transport = httpx.MockTransport(handler or (lambda r: httpx.Response(200, text="ok")))
         return RateLimitedClient(
             scope_domains=scope_domains, caller_id=caller_id,
             intercepting_client=InterceptingClient(transport=transport),
             rate_limiter=rate_limiter or RateLimiter(requests_per_second=10_000.0),  # fast, avoids real waits
+            credential_validation_allowlist=credential_validation_allowlist,
         )
 
     @pytest.mark.asyncio
@@ -182,3 +186,96 @@ class TestRateLimitedClient:
         ) as client:
             response = await client.request("GET", "http://example.com/page")
             assert response.status_code == 200
+
+
+class TestRateLimitedClientCredentialValidationAllowlist:
+    """docs/DECISIONS.md item 96: `credential_validation_allowlist` is
+    now accepted and actually threaded through to `is_allowed()` --
+    previously accepted nowhere in this class despite `caller_id`'s own
+    docstring already describing the exemption it enables."""
+
+    def _client(
+        self, *, scope_domains, caller_id=None, handler=None, credential_validation_allowlist=None
+    ) -> RateLimitedClient:
+        transport = httpx.MockTransport(handler or (lambda r: httpx.Response(200, text="ok")))
+        return RateLimitedClient(
+            scope_domains=scope_domains,
+            caller_id=caller_id,
+            intercepting_client=InterceptingClient(transport=transport),
+            rate_limiter=RateLimiter(requests_per_second=10_000.0),
+            credential_validation_allowlist=credential_validation_allowlist,
+        )
+
+    @pytest.mark.asyncio
+    async def test_correct_caller_id_and_enabled_allowlist_permits_out_of_scope_host(self):
+        allowlist = CredentialValidationAllowlist(enabled=True, external_apis=["api.stripe.com"])
+        client = self._client(
+            scope_domains=["example.com"],  # api.stripe.com is NOT in here
+            caller_id="hardcoded_credentials",
+            credential_validation_allowlist=allowlist,
+        )
+        response = await client.request("GET", "https://api.stripe.com/v1/account")
+        assert response.status_code == 200
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_wrong_caller_id_still_blocked_even_with_enabled_allowlist(self):
+        """The exemption is scanner-specific -- an allowlist alone,
+        without the matching caller_id, grants nothing."""
+        allowlist = CredentialValidationAllowlist(enabled=True, external_apis=["api.stripe.com"])
+        client = self._client(
+            scope_domains=["example.com"],
+            caller_id="xss_scanner",  # NOT hardcoded_credentials
+            credential_validation_allowlist=allowlist,
+        )
+        with pytest.raises(OutOfScopeError):
+            await client.request("GET", "https://api.stripe.com/v1/account")
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_correct_caller_id_but_disabled_allowlist_blocked(self):
+        allowlist = CredentialValidationAllowlist(enabled=False, external_apis=["api.stripe.com"])
+        client = self._client(
+            scope_domains=["example.com"],
+            caller_id="hardcoded_credentials",
+            credential_validation_allowlist=allowlist,
+        )
+        with pytest.raises(OutOfScopeError):
+            await client.request("GET", "https://api.stripe.com/v1/account")
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_correct_caller_id_but_host_not_in_external_apis_blocked(self):
+        allowlist = CredentialValidationAllowlist(enabled=True, external_apis=["api.stripe.com"])
+        client = self._client(
+            scope_domains=["example.com"],
+            caller_id="hardcoded_credentials",
+            credential_validation_allowlist=allowlist,
+        )
+        with pytest.raises(OutOfScopeError):
+            await client.request("GET", "https://not-on-the-allowlist.example.com")
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_no_allowlist_provided_defaults_to_none_and_blocks(self):
+        """Default None -- confirms every other scanner's existing
+        behavior (no allowlist ever passed) is unaffected."""
+        client = self._client(scope_domains=["example.com"], caller_id="hardcoded_credentials")
+        with pytest.raises(OutOfScopeError):
+            await client.request("GET", "https://api.stripe.com/v1/account")
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_in_scope_host_unaffected_by_allowlist_presence(self):
+        """The allowlist only ever WIDENS access to specific external
+        hosts -- it must never narrow or otherwise affect normal
+        in-scope requests."""
+        allowlist = CredentialValidationAllowlist(enabled=True, external_apis=["api.stripe.com"])
+        client = self._client(
+            scope_domains=["example.com"],
+            caller_id="hardcoded_credentials",
+            credential_validation_allowlist=allowlist,
+        )
+        response = await client.request("GET", "https://example.com/normal-target-request")
+        assert response.status_code == 200
+        await client.aclose()

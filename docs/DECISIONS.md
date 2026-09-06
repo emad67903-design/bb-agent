@@ -40,21 +40,38 @@ protocol above should work as designed.
 
 ## 2. `/race` wire contract (services/race_engine/race.go)
 
-**Status:** documented addition, not a blueprint citation. Flagged for
-your review before Week 7 (`race_scanner.py`) becomes the actual caller.
+**Status:** documented addition, not a blueprint citation. **Reviewed
+and APPROVED this session — closed, not deferred to Batch 5.** Read in
+full by the project owner: scope-checked correctly, clean
+Go-transport-vs-Python-semantics separation mirroring the
+already-approved `/smuggle` pattern (item 3), sensible defaults.
 
 The blueprint specifies the `parallel` field and its default (30,
 Section 3) and the required evidence outputs (nanosecond timestamps,
 `success_count`, Section 7.5), but no full request/response JSON schema
 anywhere (confirmed by grep against the source blueprint: only
 `POST /race {"parallel": race_parallel, ...}` appears — the same gap
-class as `/smuggle`, resolved the same way, mirrored from your resolution
-for item 1: Go performs transport-only work (fire N concurrent requests,
-capture nanosecond timestamps, classify success via a caller-supplied
-`success_status_codes` allowlist); the actual expected-vs-vulnerable
-success-count verdict is left to `race_scanner.py`, since only it knows
-what a given target's "successful redemption" response looks like. Full
-schema and rationale: header comment in `services/race_engine/race.go`.
+class as `/smuggle`, resolved the same way, mirrored from your
+resolution for item 3 [**correction, caught while updating this entry
+for the approval above:** previously miscited as "item 1" here, which
+is GitHub authentication — unrelated. Item 3 is the `/smuggle` wire
+contract entry this sentence has always actually meant. Same defect
+class this document exists to prevent (a cross-reference drifting from
+what it points to); fixed at the point it was noticed, not left for a
+future reader to trip over]: Go performs transport-only work (fire N
+concurrent requests, capture nanosecond timestamps, classify success
+via a caller-supplied `success_status_codes` allowlist); the actual
+expected-vs-vulnerable success-count verdict is left to
+`race_scanner.py`, since only it knows what a given target's
+"successful redemption" response looks like. Full schema and rationale:
+header comment in `services/race_engine/race.go`.
+
+**Remaining, separately tracked — approving the wire contract does not
+resolve this:** `ExploitCandidate`'s `success_count`/`total` field gap
+(flagged at items 69/80/87's "standing instruction" checks) is still
+open. Proceeds as its own small pre-investigation whenever Batch 5
+begins, same shape as item 81's `InteractshClient` pre-investigation —
+per the project owner's own instruction, not assumed.
 
 ## 3. `/smuggle` wire contract (services/smuggling_engine/smuggling.go)
 
@@ -3518,3 +3535,1330 @@ now imported; header docstring updated),
 `TestOOBPollOutcome` added, 8 tests). `tests/scripts/
 test_interactsh_setup.py` unmodified (12 tests, all still passing,
 confirmed before and after).
+
+## 82. `create_scanner` gains `**scanner_kwargs` passthrough — closes the InteractshClient-reachability gap, before any of Batch 2's five scanners
+
+Flagged ahead of ssrf/cmd_injection/xxe/deserialization/host_header, not
+discovered mid-scanner: item 81 built `InteractshClient` as explicitly
+session-level, shared across every scanner needing OOB confirmation
+("one `InteractshClient` per BB-Agent session... each calls
+`register_probe()` for its own fresh correlation ID against the same
+client, rather than each constructing its own client" — item 81, above).
+But `BaseScanner.__init__` (item 73) takes only `session`, and
+`create_scanner` (Week 5) calls `scanner_cls(session)` with nothing else
+to give a scanner. No scanner had any path to a shared
+`InteractshClient` instance. Confirmed by direct read of both files
+(`core/scanners/base_scanner.py`, `core/scanners/registry.py`) before
+proposing a fix, not assumed from their names.
+
+**Two options considered.**
+
+**(1) Rejected — `interactsh_client: InteractshClient | None = None` on
+`BaseScanner.__init__` itself, threaded through `create_scanner`.**
+`BaseScanner` is "the one interface all 29 scanners inherit from"
+(Engineering Constitution). Of the 29, exactly 5 need OOB — Section
+5.3's achievability matrix marks only SSRF/CMDi/XXE/Deserialization/Host
+Header as OOB-achievable (grep-confirmed against the table before this
+entry was written; SQLi's OOB cell is ⚠️ conditional, not ✅, and its own
+achievable evidence path is the `boolean_differential_confirmed`
+substitute, item covered in Section 5.2 — SQLi does not need
+`interactsh_client`). Adding an OOB-specific dependency to the shared
+base for the other 24 misreads "the one interface" as "the one place
+for every dependency any scanner might ever need," not what it actually
+names — the one thing EVERY scanner needs (`session`).
+
+It also would not, on its own, close the gap: every scanner built so
+far (Batch 1 — `xss_scanner.py`, `sqli_scanner.py`, `ssti_scanner.py`,
+`lfi_scanner.py`, `path_traversal.py`) already defines its own
+`__init__` (e.g. `def __init__(self, session, *, payloads=None)`),
+calling `super().__init__(session)` and managing its own extra state. A
+parameter added to `BaseScanner.__init__` is invisible to a subclass's
+own `__init__` unless that subclass also declares and forwards it — so
+each of Batch 2's five scanners would need its own constructor change
+regardless of where the parameter lives. Option (1) would touch a
+shared interface all 5 existing scanners and `BaseScanner`'s own tests
+depend on, for no reachability benefit over option (2), while giving 24
+scanners an attribute they will never read.
+
+**(2) Chosen — generic `**scanner_kwargs` on `create_scanner`, forwarded
+verbatim to `scanner_cls(session, **scanner_kwargs)`.**
+`BaseScanner.__init__` is untouched: zero lines changed, confirmed by
+this entry's own diff. Each scanner that needs `interactsh_client`
+declares it as its own keyword-only constructor parameter — exactly the
+precedent Batch 1 already set with `payloads` (test-injectable,
+production-defaulted). `create_scanner` stays completely
+scanner-agnostic: it does not know or care which `scanner_id` accepts
+which extra kwarg, which is what keeps it from special-casing an
+individual scanner by name (Engineering Constitution, "[SCANNER_
+REGISTRY IS THE ONLY LOOKUP PATH]" — the same mandate item 22's 29-vs-28
+Tier C bug exists to prevent a second instance of). A kwarg a given
+scanner's `__init__` does not declare raises `TypeError` at the
+`scanner_cls(...)` call, ordinary Python constructor behavior — not
+caught or translated by `create_scanner`. Full reasoning and the two
+options' comparison also live in `registry.py`'s own module docstring,
+at the exact decision point, per the Engineering Constitution's
+traceability requirement.
+
+**Deliberately NOT built here:** no Batch 2 scanner yet declares an
+`interactsh_client` parameter — that is each of those five scanners' own
+constructor work, to be done per-scanner once Batch 2 starts, the same
+way each of Batch 1's five scanners individually decided their own
+`payloads` default. This entry closes the PLUMBING gap (a scanner CAN
+reach a shared instance once its own `__init__` asks for one), not the
+scanners themselves. Whether `interactsh_client` should be required or
+optional-with-graceful-OOB-degradation on each of the five (Section
+4.3's "Degrade: in-band SSRF only; CMDi/XXE/Deser skip OOB phase" is
+explicitly `InteractshClient`'s caller's job, per item 81's own last
+paragraph, not this client's) is left to each scanner's own build,
+matching the boundary item 81 already drew.
+
+**Behavioral equivalence, proven, not assumed:**
+`tests/core/scanners/test_base_scanner.py`, `test_registry.py`'s
+pre-existing classes, and all five Batch 1 scanner test files' (plus
+`test_ci_hooks.py`'s) pre-existing tests re-run unmodified before and
+after this change — same 97 test names, same order, all passing both
+times (diffed programmatically, not eyeballed: identical output).
+`scanner_kwargs` defaults to empty, so `scanner_cls(session, **{})` is
+`scanner_cls(session)`, byte-identical to the pre-item-82 call for
+every scanner that does not opt in.
+
+**Verification:** `python3 -m pytest tests/core/scanners/
+test_base_scanner.py tests/core/scanners/test_registry.py
+tests/core/scanners/test_xss_scanner.py tests/core/scanners/
+test_sqli_scanner.py tests/core/scanners/test_ssti_scanner.py
+tests/core/scanners/test_lfi_scanner.py tests/core/scanners/
+test_path_traversal.py tests/core/scanners/test_ci_hooks.py` — 102/102
+(97 pre-existing, confirmed identical by diff, + 5 new in
+`TestCreateScannerKwargsPassthrough`). Full suite: 1108/1108 (1103 +
+5). Go suite unaffected, re-run: 32/32. Both CI hooks green
+(`ci-scanner-http-check`, `ci-scope-diff`). `payload_inventory.py`
+re-run as an unrelated sanity check (this entry touches no payload
+file): unchanged, 26 manifest entries checked.
+
+**Files this entry covers:** `core/scanners/registry.py`
+(`create_scanner` signature + docstring; module docstring's item-82
+paragraph added). `core/scanners/base_scanner.py`: **not modified** —
+zero lines changed, the load-bearing fact of option (2) over option
+(1). `tests/core/scanners/test_registry.py`
+(`TestCreateScannerKwargsPassthrough` added, 5 tests; all prior classes
+unmodified). No Batch 2 scanner file exists yet.
+
+## 83. `ssrf_scanner.py` — Batch 2's first scanner (Section 7.3); pins `interactsh_client: InteractshClient | None = None` as the exact, shared parameter name for all five Batch 2 scanners
+
+**Parameter name pinned here, binding on items 84–87 (Waild-directed):**
+per Waild's item-82 approval message, before any Batch 2 scanner code
+was written: all five OOB-dependent scanners (`ssrf`, `cmd_injection`,
+`xxe`, `deserialization`, `host_header`) declare the identical
+constructor parameter
+
+```python
+interactsh_client: InteractshClient | None = None
+```
+
+keyword-only, same position convention Batch 1 already set for
+`payloads`. Name, type, and default must not drift per-scanner — the
+precedent this guards against is named explicitly in Waild's directive:
+item 22's 29-vs-28 Tier C list-drift bug. `ssrf_scanner.py` (this entry)
+is the first of the five to implement it; `cmd_injection.py`,
+`xxe_scanner.py`, `deserialization.py`, and `host_header.py` (items
+84–87) each confirm the identical signature at the point they're built,
+not merely assert it once here and move on.
+
+**Semantics — not a free choice, Section 4.3 already specifies it:**
+item 82's own scoping left "required vs. optional-with-degradation" to
+each scanner's own build. Building the first one now: Section 4.3's
+failure-fallback table already answers this precisely — "Self-hosted
+fails → Degrade: in-band SSRF only; CMDi/XXE/Deser skip OOB phase."
+`interactsh_client=None` (or a provided client whose `.mode` is already
+`InteractshMode.UNAVAILABLE`) means `_scan_oob` returns `[]`
+immediately, logging `[SSRF_OOB_UNAVAILABLE]`; the in-band metadata
+path is entirely unaffected, since it never touches
+`interactsh_client`. This is faithful implementation of an
+already-specified rule, not a fresh judgment call — confirmed by
+reading Section 4.3 before writing `_scan_oob`, not assumed.
+
+**`is_allowed_outbound` / `RateLimitedClient` — item 71's forward
+reference traced through to a real scanner and found NOT to
+materialize.** `scope_enforcer.is_allowed_outbound()`'s own docstring
+(item 71, Week 7 foundation, written before any Batch 2 scanner
+existed) names its intended callers: "Week 7's CMDi/XXE/
+Deserialization/SSRF scanners (OOB confirmation, IMDSv2 metadata
+probing) via `RateLimitedClient`." `RateLimitedClient.request()`, as
+built (Week 5), calls `is_allowed()` — scope-only — never
+`is_allowed_outbound()`. Grepped before writing a line of scanner code:
+`is_allowed_outbound` has exactly one caller in the entire codebase —
+`core/sandbox/safety_guard.py`'s `call_target()` — confirming
+`RateLimitedClient` was never actually wired to it.
+
+Traced through `ssrf_scanner.py`'s actual request pattern to determine
+whether THIS scanner needs that wiring after all: every metadata URL
+(AWS/GCP/Azure) and every OOB URL is embedded as a **query-parameter
+value** delivered to `target_url` — a host already in `scope_domains`
+— never a destination `self.session` connects to directly.
+169.254.169.254 is link-local (RFC 3927): it only resolves to real
+cloud metadata from inside the *target's* own VM network, which is the
+entire mechanism SSRF exploits (the vulnerable target makes that
+request on the scanner's behalf; the scanner making it directly would
+be testing nothing). OOB polling goes through `InteractshClient`'s own
+dedicated `RateLimitedClient` (item 81 — constructed by its caller with
+`scope_domains=["*.interactsh.com"]`), never this scanner's own
+`self.session`.
+
+**Conclusion: `RateLimitedClient` needs no change.** Item 71's
+anticipation, read literally, does not materialize once a real Batch 2
+scanner is built against it — not because item 71 was careless (it was
+written before item 81 existed, and item 81's own entry already
+explicitly rejected retrofitting `RateLimitedClient` globally for the
+interactsh half, "for the exact reason item 66 already gave: 'a
+scanner's own HTTP calls should not silently gain an SSRF-adjacent
+exception it never asked for'" — the metadata half of item 71's
+anticipation turns out to need the identical rejection, for the
+identical reason, once actually traced through). Recorded here so this
+doesn't sit as a silently-unresolved forward reference: item 71's
+anticipated need is closed, with reasoning, not left open for a future
+reader to wonder about. The remaining four Batch 2 scanners (cmd_
+injection, xxe, deserialization, host_header) are expected to fit the
+same pattern — each confirms this against its own actual request shape
+when built, per the same "don't assume prior batches' silence proves
+it" standing instruction that applies to `probe_correlation_id`.
+
+**Priorities 1+2 deliberately not implemented** — Section 7.3's own
+"Implementation note": "Do not document Priority 1+2 as the default
+path for simple URL-injection SSRF." This scanner has exactly one
+capability — substituting a payload into an existing query parameter
+(`param_injection.py`'s established, GET-only scope) — no method-
+override or header-injection capability of its own. Priority 3 (AWS
+IMDSv1, "always achievable"), Priority 4 (GCP), and Priority 5 (Azure)
+are implemented; Priority 1 (PUT `/latest/api/token`) and Priority 2
+(GET with that token) are not, matching Section 7.3's own guidance that
+their achievement is a chain-level (SSRF + header injection) finding,
+Deep Lane's job, not Fast Lane's.
+
+**`probe_correlation_id` — first real usage, confirmed correct, not
+assumed from the field's own docstring alone:** holds the *bare*
+correlation ID (`"XBOW_{session_id}_{nonce}"`), not the full `oob_url`
+— Section 4.2's own notation treats these as two different strings.
+Derived via the identical `oob_url.removesuffix(INTERACTSH_SUFFIX)`
+`InteractshClient.poll()` already uses internally (same imported
+constant, not a re-typed literal). One `register_probe()` call per
+candidate parameter, not one shared across all of them on an endpoint
+— `ExploitCandidate.parameter` is a required field for SSRF (not one
+of item 69's four no-parameter cases: CORS/Host-Header/CSRF/Auth), and
+a shared correlation ID would make that field unrecoverable the moment
+more than one parameter is tested. Verified directly: `test_
+multiple_parameters_get_distinct_correlation_ids` confirms two
+candidates on a two-parameter URL carry two distinct, non-`None`
+correlation IDs.
+
+**Concurrent OOB polling — authored efficiency decision, not
+blueprint-cited:** `InteractshClient.poll()` blocks up to 5 real
+minutes per call (Section 4.2 step 5). Section 7.3 does not discuss
+concurrency across multiple candidate parameters on one endpoint.
+Polling sequentially would cost up to N × 5 minutes for one `scan()`
+call on one endpoint, against Section 6.6's 1–3 hour Fast Lane budget
+for all 29 scanners combined. `_scan_oob` sends every probe first,
+then polls all of them together via `asyncio.gather`, bounding one
+`scan()` call's OOB wall-clock cost at ~5 minutes regardless of
+parameter count — each `poll()` call stays independently scoped to its
+own correlation ID, so this changes wall-clock cost only, never
+detection semantics.
+
+**AWS's 401 check is baseline-guarded; GCP/Azure's body-marker checks
+are not — asymmetric on purpose, not an oversight.** HTTP 401 is a
+generic status code an auth-walled endpoint could already return for
+every request regardless of any SSRF payload; one baseline fetch (the
+same one-baseline-per-`scan()`-call convention `lfi_scanner.py`/
+`sqli_scanner.py` already use) guards it:
+`response.status_code == 401 and baseline.status_code != 401`. The
+GCP/Azure markers (`computeMetadata`, the paired `status`+
+`permission_denied` JSON-error check, the quoted `"compute"`/
+`"network"` JSON keys) are specific enough that Section 7.3 does not
+ask for a baseline comparison; adding one un-requested risks a false
+negative on the exact narrow signal named. `test_401_baseline_also_
+401_produces_no_candidate` confirms the guard fires; the initial draft
+of two unrelated field-level tests (`raw_response_snapshot` truncation,
+`http_method`) briefly regressed against this exact guard — their
+handlers returned 401 unconditionally, so the baseline fetch was also
+401 and correctly produced zero candidates. Caught by the test run
+itself (0 candidates where 1 was asserted), not missed: both handlers
+fixed to return a non-401 baseline, matching every other AWS test in
+the file. Confirms the guard behaves as designed even where a test
+didn't intend to exercise it.
+
+**Detection markers are authored, not blueprint-enumerated** —
+`_matches_gcp_signal`/`_matches_azure_signal` — same flag `sqli_
+scanner.py`'s `DB_ERROR_SIGNATURES` and `lfi_scanner.py`'s `WINDOWS_
+FINGERPRINT_HEADERS` already carry. Section 7.3 names each signal in
+prose; the exact substring checks are this scanner's own literal
+reading of that prose.
+
+**Verification:** `tests/core/scanners/test_ssrf_scanner.py` — 30/30
+(new). Full suite: 1138/1138 (1108 + 30). Go suite unaffected: 32/32.
+Both CI hooks green (`ci-scanner-http-check`, `ci-scope-diff`).
+`payload_inventory.py`: 26 manifest entries, unchanged count (this
+entry fills in `ssrf_payloads.json`'s content, not its registration).
+
+**Files this entry covers:** `core/scanners/ssrf_scanner.py` (new),
+`data/payloads/ssrf_payloads.json` (stub → 4 real entries: 3
+`in_band_metadata` + 1 `oob` template), `tests/core/scanners/
+test_ssrf_scanner.py` (new, 30 tests).
+
+## 84. `cmd_injection.py` — Batch 2's second scanner (Section 7.8)
+
+**`interactsh_client: InteractshClient | None = None` — confirmed
+identical, not re-asserted from item 83's silence:** same name, type,
+default, keyword-only position as `ssrf_scanner.SSRFScanner`. Checked
+directly against this file's own signature before writing this
+sentence, per Waild's directive that each of the five confirms it at
+build time.
+
+**Pure OOB, no in-band fallback — the one genuine design difference
+from item 83:** Section 7.8's complete detection text is "OOB only";
+there is no second technique to fall back on the way SSRF's in-band
+metadata matrix stands independent of interactsh. `scan()` therefore
+short-circuits to `[]` the moment `interactsh_client` is `None` or
+already `UNAVAILABLE` — Section 4.3's "CMDi/XXE/Deser skip OOB phase"
+literally has no other phase to name for this scanner. Verified this
+short-circuits **before any request is sent at all**
+(`test_no_interactsh_client_returns_empty_without_any_request` asserts
+`call_count == 0`) — SSRF's equivalent case still made in-band requests
+because it has an independent path; this one has nothing to run.
+
+**`is_allowed_outbound` / `RateLimitedClient` — re-traced against this
+scanner's own mechanics, not assumed from item 83:** the injected
+payload is a shell metacharacter sequence embedding an interactsh
+hostname (e.g. `"; ping XBOW_xxx.interactsh.com -c 1"`), delivered the
+identical way SSRF's metadata/OOB URLs are — as a query-parameter value
+sent to `target_url` (already in `scope_domains`). The vulnerable
+target's own shell resolves and pings the embedded hostname; this
+scanner's `self.session` never connects to it. Same conclusion as item
+83: no `RateLimitedClient` change needed. Independently re-confirmed,
+not inherited by assumption.
+
+**Separator × OS variants (8 payload entries) — authored, flagged the
+same way item 83's GCP/Azure markers are:** Section 7.8 gives one
+literal example (`; ping {interactsh_url} -c 1`). `cmd_payloads.json`
+extends this across 4 separators (`;`, `|`, `&&`, newline) × 2 OS
+ping-flag variants (`-c 1` Unix, `-n 1` Windows) — real CMDi surface
+varies by injection context and target OS, neither knowable in advance,
+and Section 7.8 doesn't restrict this scanner to the one literal
+example the way, say, SSTI's engine-fingerprint payloads are
+implicitly bounded by "which template engines exist." All 8 remain
+single-echo, non-destructive — `test_no_destructive_payloads` greps for
+`rm `/`del `/`format`/`shutdown`/`reboot`/`>` across every entry and
+confirms none appear, and every entry contains `ping`, matching Section
+10.1's `TIER_C_RULES` auto_allow line verbatim: "CMDi OOB interactsh
+ping only (no destructive command)."
+
+**Response text captured for `raw_response_snapshot` even though the
+callback, not the response, is the actual proof:** this was nearly
+inconsistent with `ssrf_scanner.py` — an early draft discarded the
+probe response entirely (`raw_response_snapshot=None`), noticed and
+fixed before running any test, to match `ssrf_scanner.py`'s OOB path
+capturing the real (truncated) response text. Kept for the same
+reason: the field's own docstring describes it as "truncated response
+body backing the signal," and a captured-but-unused response is more
+faithful to that than a hardcoded `None`.
+
+**One `oob_url` per (parameter, payload-variant) pair, not per
+parameter alone:** this scanner has both multiple candidate parameters
+AND multiple payload variants per parameter (unlike item 83's SSRF OOB
+path, one variant only) — every `(parameter, variant)` pair gets its
+own `register_probe()` call.
+`test_multiple_parameters_and_variants_produce_full_cross_product`
+confirms 2 parameters × 2 payload variants yields exactly 4 candidates,
+not 2.
+
+**Verification:** `tests/core/scanners/test_cmd_injection.py` — 14/14
+(new). Full suite: 1152/1152 (1138 + 14). `ci-scanner-http-check`:
+green. Go suite and `ci-scope-diff` unaffected by this entry (no
+Go/scope files touched) — re-verified together with items 85–87 before
+the batch bundle, not re-run per entry from here on, matching Batch
+1's own per-item verification granularity (item 74–79's individual
+entries don't each re-quote the Go suite either; item 80, the batch's
+last entry, is where the full cross-batch verification lands).
+
+**Files this entry covers:** `core/scanners/cmd_injection.py` (new),
+`data/payloads/cmd_payloads.json` (stub → 8 real entries),
+`tests/core/scanners/test_cmd_injection.py` (new, 14 tests).
+
+## 85. `xxe_scanner.py` — Batch 2's third scanner (Section 7.9); first real departure from `param_injection.py`'s pattern, extends item 69's no-parameter list
+
+**The genuine architectural finding this entry exists to record:**
+every scanner built so far — Batch 1's five, plus items 83/84's
+`ssrf_scanner.py`/`cmd_injection.py` — substitutes a payload into one
+of `target_url`'s *existing* query parameters. XXE has no existing
+parameter to substitute into: Section 7.9's technique is a crafted
+whole XML document, POSTed as the entire request body, with an
+external-entity DTD doing the actual injection work. Confirmed by
+reading Section 7.9 in full before writing a line of code, not assumed
+from the file tree's one-line description — `iter_query_param_
+injections` is not imported into `xxe_scanner.py` at all.
+
+**`ExploitCandidate.parameter = None` — item 69's four-case list
+extended to five, not silently reached for.** Item 69's own docstring
+names exactly four no-single-parameter `vuln_type`s — CORS, Host
+Header, CSRF, Auth — and states "every other vuln_type is expected to
+supply a real value." XXE was not among the four; nothing before this
+entry flagged it. Checked directly against XXE's real mechanics (see
+above): there is no query/body *parameter* being substituted, the
+*entire body* is the payload — the same "no single query/body
+parameter in the conventional sense" shape item 69 already used to
+justify CORS and CSRF, just not applied to XXE at the time item 69 was
+written (Batch 1, before any batch actually exercised XXE). `parameter
+= None` for both of `xxe_scanner.py`'s techniques.
+`test_hostname_like_content_produces_candidate` and `test_callback_
+received_produces_candidate_with_bare_correlation_id` both assert
+`candidate.parameter is None` directly, not merely omit checking it.
+
+**`http_method = "POST"`, not Batch 1/83/84's `"GET"`** — the accurate
+value for what this scanner actually sends. Section 6.9's `DEDUP_KEY`
+including `http_method` exists exactly so this doesn't collide with a
+hypothetical GET-based finding on the same endpoint; XXE has never
+been, and could not correctly be, a GET-based technique.
+
+**`interactsh_client: InteractshClient | None = None` — confirmed
+identical, independently, a third time:** same name/type/default as
+items 83 and 84. This scanner's `None` semantics differ from `cmd_
+injection.py`'s (which has no fallback at all): XXE degrades to the
+`in_band_file_read` technique only, per Section 7.9's own "AND/OR"
+— `test_no_interactsh_client_skips_oob_but_hostname_check_still_runs`
+confirms the hostname path still produces a candidate when
+`interactsh_client=None`, distinguishing this from `cmd_injection.py`'s
+"nothing runs at all" case.
+
+**`is_allowed_outbound` / `RateLimitedClient` — re-traced a third time,
+same conclusion:** the OOB URL lives inside the XML body's entity
+`SYSTEM` identifier, delivered to `target_url` — still never a
+destination `self.session` connects to directly. No `RateLimitedClient`
+change. Three of Batch 2's five scanners now independently confirm
+item 71's anticipated need does not materialize; the remaining two
+(deserialization, host_header) are expected to as well, each still
+checked against its own actual mechanics when built, not assumed from
+this streak.
+
+**`content_heuristics.looks_like_hostname_content` — third scanner to
+share it**, after `lfi_scanner.py` and `path_traversal.py` (item 78's
+note already anticipated exactly this kind of reuse). Same helper,
+same three-part rule, same inherent black-box limits — not
+re-implemented, not re-litigated.
+
+**Exactly two payload entries, not extended the way items 83/84's
+were:** Section 7.9's text names exactly two techniques ("OOB DTD
+callback AND/OR `/etc/hostname` file read") with no per-context/per-OS
+coverage gap the way CMDi's separators or SSRF's cloud providers have —
+`xxe_payloads.json` has one entry per technique, no invented DTD
+structural variants, one Content-Type value
+(`application/xml`, authored, flagged the same way).
+
+**Verification:** `tests/core/scanners/test_xxe_scanner.py` — 16/16
+(new). Full suite: 1168/1168 (1152 + 16). `ci-scanner-http-check`:
+green.
+
+**Files this entry covers:** `core/scanners/xxe_scanner.py` (new),
+`data/payloads/xxe_payloads.json` (stub → 2 real entries),
+`tests/core/scanners/test_xxe_scanner.py` (new, 16 tests).
+
+## 86. `deserialization.py` — Batch 2's fourth scanner (Section 7.16); Python-only OOB gadget, Java/PHP coverage flagged as a genuine open gap rather than fabricated
+
+**Same pure-OOB shape as `cmd_injection.py` (item 84), confirmed
+against this scanner's own text, not copied by assumption:** Section
+7.16: "Detection + safe exploit: OOB only. Gadget chain triggers
+DNS/HTTP to interactsh. No RCE gadget." `interactsh_client:
+InteractshClient | None = None` confirmed identical to items 83–85.
+`is_allowed_outbound`/`RateLimitedClient` re-traced a fourth time
+against this scanner's actual mechanics (the gadget's DNS-lookup target
+is embedded in the serialized payload, delivered as a query-parameter
+value — same conclusion, independently re-derived, not assumed from the
+streak).
+
+**The investigation this entry exists to record: Section 3.1 asks for
+"Java/Python/PHP OOB gadgets." Only Python is delivered.** Checked
+what's actually available before writing any payload, not after:
+
+```
+$ which java javac; php --version
+/usr/bin/java
+(javac not found)
+php: not found
+```
+
+- **Python — built.** A safe, non-RCE `__reduce__` gadget:
+  `socket.gethostbyname(oob_url)`. DNS lookup only — no file I/O, no
+  subprocess, no code execution — the same "safest gadget" pattern the
+  security community already uses for exactly this purpose (Java
+  ysoserial's URLDNS gadget: `java.net.URL.hashCode()` triggers DNS
+  resolution and nothing else). Verified genuinely, not eyeballed: `pickle.dumps` →
+  `pickletools.dis` (confirmed the disassembly shows exactly one
+  `GLOBAL` reference to `gethostbyname` and a `REDUCE`, nothing
+  resembling `BUILD`/`STACK_GLOBAL` abuse) → `pickle.loads` against a
+  **patched** `_socket.gethostbyname` (not `socket.gethostbyname` —
+  the first attempt patched the wrong module and the unpickle call
+  fell through to a real DNS resolution attempt, caught by the test
+  itself failing with `socket.gaierror` rather than silently "working"
+  — corrected before this design went anywhere near the payload file)
+  → confirmed across three different-length hostnames, since the
+  substitution mechanism (see below) needed to be length-independent,
+  not just correct for one test string.
+
+- **Java — not built.** This sandbox has a JRE (`java`) but no
+  compiler (`javac`) — there is no way to construct AND verify a custom
+  serialization gadget here the way the Python one was verified. A
+  pure-JDK equivalent exists in principle (`java.net.URL`-keyed
+  `HashMap`, same DNS-only mechanism, no third-party library required)
+  but building it blind, with no way to compile or round-trip it in
+  this environment, would be exactly the "plausible-sounding but
+  unverified technical artifact" this project's whole verification
+  culture exists to prevent. The alternative — fetching a pre-built
+  exploit-generation tool (ysoserial) to sidestep the missing compiler
+  — was considered and rejected: that is a materially different kind
+  of action than hand-authoring one narrow, well-documented,
+  safety-constrained technique, which is what every other payload in
+  this project (this one included) actually is.
+
+- **PHP — not built.** Not installed in this sandbox, and more
+  fundamentally not a coherent "universal" gadget the way Python's
+  `__reduce__` is: PHP object-injection payloads are inherently
+  target-library-specific (they depend on a particular class with an
+  exploitable `__wakeup`/`__destruct`/`__toString` on the *target's*
+  own classpath, which is exactly why tools like phpggc curate
+  per-framework chains rather than shipping one generic payload).
+  Nothing generic to author here without knowing the target's stack in
+  advance — unlike Python or Java's DNS-only primitives, there is no
+  narrow, safe, universally-applicable PHP equivalent to build.
+
+**This is a real, open coverage gap, recorded for review, not a
+silent omission** — flagged in `deserialization_payloads.json`'s own
+`_status` field (so it's visible to anyone reading the payload file
+directly, not only this log) and here. `test_no_java_or_php_entries`
+asserts the payload set is Python-only directly, rather than the gap
+only existing in prose that could drift from the code.
+
+**Placeholder-substitution, not `str.format()`, for the payload
+template — the pickle payload is binary, `oob_url` is only known at
+scan time:** the stored template embeds a literal `OOB_URL_PLACEHOLDER`
+baked in at authoring time; `_render_pickle_payload` base64-decodes,
+substitutes the placeholder at the **bytes** level, re-encodes. Safe
+specifically because pickle protocol 0's `UNICODE` opcode is
+newline-terminated, not length-prefixed — confirmed via
+`pickletools.dis` before relying on it, not assumed from general pickle
+familiarity. `test_handles_varying_hostname_lengths` exercises three
+different substituted lengths against the actual rendering function
+(not just the scratch verification above).
+
+**Query-parameter injection (like `cmd_injection.py`), not whole-body
+(like `xxe_scanner.py`):** `deserialization_payloads.json` is
+classified `injectable_payload` (Section 3.1), same category as
+CMDi/SSRF, and real-world insecure deserialization commonly arrives via
+a cookie or parameter carrying a serialized blob — parameter
+substitution fits this vuln_type's actual surface.
+`ExploitCandidate.parameter` is a real value, not `None` — not one of
+item 69's four no-parameter cases (confirmed, following the same
+per-scanner check XXE's entry (item 85) established, not skipped here
+because CMDi/SSRF already had real parameters).
+
+**Verification:** `tests/core/scanners/test_deserialization.py` —
+15/15 (new). Full suite: 1183/1183 (1168 + 15). `ci-scanner-http-check`:
+green.
+
+**Files this entry covers:** `core/scanners/deserialization.py` (new),
+`data/payloads/deserialization_payloads.json` (stub → 1 real entry,
+Python only — Java/PHP deliberately absent, see above),
+`tests/core/scanners/test_deserialization.py` (new, 15 tests).
+
+## 87. Batch 2 complete — all 5 scanners registered, full suite and both CI hooks re-verified together
+
+Closes out `ssrf_scanner`, `cmd_injection`, `xxe_scanner`,
+`deserialization`, `host_header` (items 83–86) as one integrated unit,
+same convention item 80 established for Batch 1.
+
+**All 10 scanners built so far (Batch 1 + Batch 2) import and register
+together with zero `SCANNER_REGISTRY` key collisions**, confirmed by
+importing all ten modules in one process and checking
+`SCANNER_REGISTRY` directly: `cmd_injection`, `deserialization`,
+`host_header`, `lfi_scanner`, `path_traversal`, `sqli_scanner`,
+`ssrf_scanner`, `ssti_scanner`, `xss_scanner`, `xxe_scanner` — exactly
+10 entries, no duplicates.
+
+**`interactsh_client: InteractshClient | None = None` — the naming pin
+Waild's item-82 approval required, confirmed across all five, not
+merely asserted once at item 83 and assumed to hold:** identical
+name/type/default/keyword-only-position in `ssrf_scanner.py` (item 83),
+`cmd_injection.py` (item 84), `xxe_scanner.py` (item 85),
+`deserialization.py` (item 86), and `host_header.py` (this batch's
+final entry) — each entry confirmed it independently against its own
+file, per Waild's directive, rather than the later four citing item 83
+and moving on.
+
+**`is_allowed_outbound` / `RateLimitedClient` — traced against all five
+scanners' actual mechanics, same conclusion every time:** no scanner in
+this batch needed a `RateLimitedClient` change. Every OOB/metadata/
+gadget/Host-header value each scanner sends is delivered as data (a
+query-parameter value, an XML body, a header) to the target endpoint
+itself — never a destination any of the five scanners' own `self.session`
+connects to directly. Item 71's Week-6 anticipation that "Week 7's
+CMDi/XXE/Deserialization/SSRF scanners... via `RateLimitedClient`"
+would need the interactsh/metadata exception does not materialize for
+any of them, once actually built and checked rather than assumed.
+
+**`payload_inventory.py` (Week 0) re-run against all 5 now-populated
+payload files** — clean, confirms the `_file_type` manifest check still
+satisfies and that populating real content (including
+`deserialization_payloads.json`'s intentionally partial — Python-only —
+content) did not break the schema Week 0 validated.
+
+**Full suite: 1198/1198** (1103 HEAD-b52d7c9 baseline + 5 item 82 +
+30 item 83 + 14 item 84 + 16 item 85 + 15 item 86 + 15 item 87 (this
+entry's own `test_host_header.py`)). Both CI hooks
+(`ci-scanner-http-check`, `ci-scope-diff`) green — no scanner file in
+this batch imports `httpx`/`requests` directly (all five route through
+`self.session`/`RateLimitedClient`, matching the Constitution's "ONE
+HTTP LAYER, NO EXCEPTIONS" mandate); no Go file touched this batch. Go
+suite: 32/32, re-run not assumed.
+
+**`probe_correlation_id` (item 69) — Batch 2 is the first batch that
+actually exercises it, confirmed to fit all five, not assumed from
+Batch 1's silence (prompt's own standing instruction for this batch):**
+holds the bare correlation ID (not the full `oob_url`) in all four
+scanners that use it (`ssrf_scanner`, `cmd_injection`, `xxe_scanner`,
+`deserialization`) — `host_header`'s OOB path uses it too, five for
+five. Derivation is identical everywhere it appears:
+`oob_url.removesuffix(INTERACTSH_SUFFIX)`, the same imported constant,
+never a re-typed literal.
+
+**`ExploitCandidate.parameter` (item 69) — the four-case no-parameter
+list is now five, confirmed per-scanner, not assumed:** `ssrf_scanner`,
+`cmd_injection`, `deserialization` all supply a real parameter value
+(query-parameter substitution, matching Batch 1's own shape). `xxe_
+scanner` (item 85) required extending item 69's original four-case list
+to five — a genuine finding, not anticipated before this batch.
+`host_header` (this batch's fifth) confirmed item 69's *original*
+Host-Header entry was already correct, needing no extension — the only
+one of the five where item 69's prior guess held exactly as written.
+
+**One coverage gap carried forward, not silently closed:**
+`deserialization.py`'s Java/PHP gadget coverage (item 86) — Python only
+is delivered; Java is blocked by this sandbox having no compiler
+(`javac`) and a deliberate decision not to fetch a pre-built
+exploit-generation tool to work around that; PHP has no installed
+runtime here and, more fundamentally, no target-agnostic universal
+gadget the way Python's `__reduce__` is one. Flagged in the payload
+file's own `_status` field and in item 86, not discovered later by
+diffing payload counts.
+
+**Files this entry covers:** none new — summary/verification entry
+over items 83–86's files.
+
+## 88. `crlf_injection.py` — Batch 3's first scanner (Section 7.17)
+
+**Encoding verified empirically before writing any code, not assumed
+from general `urlencode()` familiarity:** the blueprint's own literal
+example (`%0d%0aX-XBOW-PROBE: 1`) is already percent-encoded prose.
+Storing that literal string as the payload would be encoded a SECOND
+time by `iter_query_param_injections`'s `urlencode()` call (`%` →
+`%25`), producing a harmless, non-functional payload. Confirmed
+directly: a payload holding a real `\r\n` character produces exactly
+one `%0D%0A` in the constructed URL — functionally identical to the
+blueprint's `%0d%0a` (percent-encoding hex digits are case-insensitive
+per RFC 3986). The payload file stores the real `\r\n` character
+(JSON's own `\r\n` escaping represents it losslessly); round-tripped
+through `json.load` and confirmed byte-for-byte before use.
+
+**Detection is header-based, not body-based** — `response.headers.get(...)
+== probe_header_value`, never a substring search over `response.text`.
+A CRLF sequence merely reflected in the response BODY as text is not
+proof of header injection; `test_header_reflected_in_body_only_is_not_a_
+signal` confirms a body-only reflection does not fire.
+
+**No `interactsh_client` declared** — Section 7.17 names no OOB
+technique, matching Batch 1's five scanners' own precedent (the
+parameter was pinned, item 83, specifically for the five scanners that
+need it — not retrofitted onto every scanner regardless of need).
+`test_no_interactsh_client_parameter` confirms this directly via
+`inspect.signature`, not left to prose alone.
+
+**Verification:** `tests/core/scanners/test_crlf_injection.py` — 10/10
+(new).
+
+**Files this entry covers:** `core/scanners/crlf_injection.py` (new),
+`data/payloads/crlf_payloads.json` (stub → 1 real entry),
+`tests/core/scanners/test_crlf_injection.py` (new, 10 tests).
+
+## 89. `open_redirect.py` — Batch 3's second scanner (Section 7.19); payload file classification caught 3 more variants Section 7.19's own prose doesn't mention
+
+**The catch this entry exists to record:** Section 7.19's prose gives
+exactly one literal example (`redirect=https://example.com`).
+`redirect_payloads.json`'s own stub `_notes` field — "Protocol-relative,
+javascript:, data:" (Section 3.1's table) — names three more variant
+types. Caught by reading the stub before assuming the prose was the
+complete payload set, the same discipline that caught XXE's/
+deserialization's own scope questions. All four variants
+(`https://example.com`, `//xbow-open-redirect-probe.example`,
+`javascript:void(0)`, a `text/plain` `data:` URI) share one detection
+check — only the payload string differs. The `javascript:`/`data:`
+entries use non-executing values (`void(0)`, `text/plain`) even though
+this scanner only ever inspects the `Location` header and never
+navigates anywhere — matching the project's general safe-by-
+construction habit at no cost.
+
+**Fixed marker, not randomized — a deliberate departure from
+`xss_scanner.py`/`host_header.py`'s own convention, reasoned rather
+than defaulted:** those scanners randomize because their check (does
+*any* trace of the marker appear anywhere in a response body) is loose
+enough that a fixed literal risks a coincidental match. This scanner's
+check is categorically stricter — the `Location` header must equal the
+exact payload just sent, on a genuine redirect status code — no
+legitimate `Location` value would coincidentally match any of these
+four literals on its own. `test_baseline_already_redirecting_there_
+produces_no_candidate` confirms the required `differential` evidence
+type (Section 7.19: `replay_stable + differential = 2`) is actually
+enforced, not just present in the evidence-type list.
+
+**"Auto-feeds `chain_engine`" (Section 7.19) is out of scope here** —
+that consumption is `chain_engine.py`'s own job, downstream of this
+scanner emitting a plain `ExploitCandidate` like every other scanner.
+Nothing in this file calls anything chain-related.
+
+**No `interactsh_client` declared**, same reasoning as item 88.
+
+**Verification:** `tests/core/scanners/test_open_redirect.py` — 11/11
+(new).
+
+**Files this entry covers:** `core/scanners/open_redirect.py` (new),
+`data/payloads/redirect_payloads.json` (stub → 4 real entries),
+`tests/core/scanners/test_open_redirect.py` (new, 11 tests).
+
+## 90. `prototype_pollution.py` — Batch 3's third scanner (Section 7.15); a new injection shape — appending a parameter, not substituting one
+
+**Two techniques, not Section 7.15's one prose example** — same catch
+class as item 89: `prototype_pollution_payloads.json`'s stub `_notes`
+("`__proto__`/`constructor.prototype` probes", Section 3.1) names both;
+the prose gives only `__proto__`.
+
+**The genuine architectural finding this entry exists to record:**
+every scanner built so far substitutes a payload into an EXISTING query
+parameter, or (XXE) replaces a whole body. Section 7.15's payload
+(`__proto__[xbow_probe]=12345`) is neither — it is itself a brand-new
+query parameter to be ADDED alongside whatever `target_url` already
+has. `_append_query_param` (new, local to this file) handles this; kept
+local rather than added to `param_injection.py` since only one scanner
+in this batch needs it — the same "don't build shared infrastructure
+ahead of a second, proven need" discipline `content_heuristics.py`'s
+own sharing (item 78) already established, applied in the opposite
+direction here (a genuine reason NOT to share yet).
+
+**`ExploitCandidate.parameter` = the injected key itself, NOT `None` —
+a considered judgment call, not a default:** unlike item 69's five
+no-single-parameter cases (none of which have ANY query/body parameter
+in the conventional sense), this payload IS structurally a query
+parameter — it has a name and a value and sits in the query string, it
+is just newly-added rather than substituted. A difference in injection
+mechanism, not a difference in whether a parameter exists to name. Not
+a sixth no-parameter case.
+
+**Behavioral verification uses a random marker, not the blueprint's
+literal `12345`:** two requests per payload — the polluted request,
+then a clean follow-up to the unmodified `target_url` with no pollution
+parameter at all. A random marker checked for in the clean follow-up is
+direct evidence of persistent, cross-request state pollution; a fixed
+literal like `12345` couldn't rule out coincidence with the same
+confidence, the same reasoning `host_header.py` (item 87) already
+established for its own marker.
+
+**No `interactsh_client` declared**, same reasoning as items 88–89.
+
+**Verification:** `tests/core/scanners/test_prototype_pollution.py` —
+12/12 (new).
+
+**Files this entry covers:** `core/scanners/prototype_pollution.py`
+(new), `data/payloads/prototype_pollution_payloads.json` (stub → 2 real
+entries), `tests/core/scanners/test_prototype_pollution.py` (new, 12
+tests).
+
+## 91. `cors_scanner.py` — Batch 3's fourth scanner (Section 7.11); no payload file by design, and a flagged `DEDUP_KEY` granularity limitation
+
+**No payload file — confirmed by design, not an oversight:** Section
+3.1's own note names `cors_scanner.py` (with `auth_scanner.py`) as
+using "header-level and state-machine analysis, not injected payloads.
+No payload file by design." No `cors_payloads.json` exists in
+`data/payloads/`, nor is one named in Section 3.1's 26-file table —
+confirmed directly, not assumed. This scanner's `__init__` takes no
+`payloads` parameter; `test_no_payloads_parameter` checks this via
+`inspect.signature`.
+
+**`parameter = None` already correctly anticipated by item 69,
+confirmed here, not a new finding** — same shape as `host_header.py`
+(item 87): item 69 already names CORS as one of its original four
+no-parameter cases ("Origin header, not a query/body parameter").
+
+**Four independent signals, matching Section 7.11's text exactly** —
+origin reflection, ACAC-with-reflection (a stricter version of signal
+1, firing as an additional candidate on the same response, not a
+standalone check), preflight bypass (`OPTIONS` + `Access-Control-
+Request-Method: PUT`), and null-origin acceptance (the literal string
+`"null"`, not randomizable — that IS the test). Random probe origin for
+signals 1/2/3 (not the blueprint's literal "evil.com" example), same
+false-positive-avoidance reasoning as `host_header.py`'s own marker.
+
+**A genuine `DEDUP_KEY` granularity limitation, flagged rather than
+worked around:** signals 1, 2, and 4 all produce `http_method="GET"`
+and `parameter=None` (unavoidable, per item 69, above) — three of
+CORS's four signals share an identical `(vuln_type, endpoint_path,
+http_method, parameter)` key on a given endpoint and would collapse
+under Section 6.9's dedup policy; only signal 3's `"OPTIONS"` method
+distinguishes it. Considered encoding the signal name into `parameter`
+purely to force distinctness, and rejected: that would misuse a field
+item 69 already established has no genuine value here, contradicting a
+previously-confirmed convention to paper over a reporting-granularity
+gap. Section 6.9's dedup policy merges same-key findings into one with
+richer evidence rather than discarding information, so the practical
+cost is reduced reporting distinctness, not lost detection — a real
+ontology gap, not a correctness bug. Left open for whoever next touches
+`DEDUP_KEY` or `ExploitCandidate`'s shape; not this scanner's to fix
+unilaterally.
+
+**No `interactsh_client` declared**, same reasoning as items 88–90.
+
+**Verification:** `tests/core/scanners/test_cors_scanner.py` — 15/15
+(new). One self-caught test bug along the way: an early draft of
+`test_each_scan_uses_a_distinct_random_origin` wrongly assumed every
+single request within one `scan()` call should carry a unique probe
+origin; the scanner correctly reuses one `probe_origin` across its GET
+and OPTIONS requests within a call (signals 1/2/3 all test the same
+injected origin) and only varies it ACROSS separate `scan()` calls.
+Caught by the test's own failure output, not the scanner's — fixed by
+correcting the test's assumption, not the scanner.
+
+**Files this entry covers:** `core/scanners/cors_scanner.py` (new), no
+payload file (by design, see above), `tests/core/scanners/
+test_cors_scanner.py` (new, 15 tests).
+
+## 92. `api_versioning.py` — Batch 3's fifth and final scanner (Section 7.24); a third injection shape, item 69's list extended to six, and a self-caught unused-parameter defect
+
+**A third distinct injection shape this project has now built** —
+neither query-parameter substitution, nor a newly-added parameter
+(item 90), nor a whole-body replacement (XXE, item 85). This scanner
+rewrites a URL PATH SEGMENT: finds a version marker in `target_url`'s
+path and constructs an alternate URL with the version number
+decremented by one.
+
+**`ExploitCandidate.parameter = None` — extends item 69's list to six,
+a second such finding this session (after XXE, item 85), found here,
+not assumed:** this technique touches a URL path segment, not a
+query/body parameter and not a header — none of item 69's five existing
+justifications describe a path segment, but the underlying reasoning is
+the same shape: no single query/body parameter in the conventional
+sense to name. Unlike CORS's four-signals-one-endpoint collision risk
+(item 91), this is not a `DEDUP_KEY` collision concern: `endpoint`
+(`target_url`, unchanged) already differs across different
+version-testable URLs, so the key stays distinct per finding even with
+`parameter` always `None`.
+
+**Self-caught defect, fixed before the file was considered done, not
+after:** a first draft accepted a `payloads` constructor parameter that
+`scan()` never actually read — the version-segment regex was a
+hardcoded Python constant instead. Noticed while reviewing the file
+against `api_versioning_payloads.json`'s own Section 3.1 classification
+(`injectable_payload`, NOT one of the two files Section 3.1 explicitly
+exempts) — a payload file the blueprint classifies as real but a
+scanner that never consumes it is exactly the kind of silent
+inconsistency this project's `_status`-field discipline exists to
+prevent. Fixed: the regex now lives in the payload file's own `pattern`
+field, read via `self._payloads` — config-driven (Engineering
+Constitution: "zero magic numbers"), genuinely exercised. One pattern
+entry, not several: `/v(\d+)/` is a substring search, not anchored to
+the path's start, so it already matches both `/v2/admin` and
+`/api/v2/admin`-shaped URLs — verified directly
+(`test_api_prefixed_v_segment_matches_via_substring`) before deciding a
+second pattern wasn't needed.
+
+**A second self-caught defect, unrelated to the first:** the module
+docstring's prose used an un-escaped `\d` inside a non-raw triple-
+quoted string, triggering a Python 3.12 `SyntaxWarning` on import (`\d`
+isn't a recognized escape sequence). Caught by running the file's
+import under `python3 -W error` — not by eyeballing — and fixed by
+escaping to `\\d`. All five of this batch's scanner files re-checked
+the same way afterward, not just this one, on the theory that a mistake
+found once is worth ruling out everywhere it could recur: all five
+import warning-free.
+
+**Two-part detection condition, matching Section 7.24's text
+precisely:** the given URL must itself return 403 first (nothing to
+bypass otherwise); only then does the alternate version's response get
+checked, with any non-403 status counting as the signal —
+`test_v2_denied_v1_also_denied_but_different_status_is_not_a_bypass`
+documents that a 404 (not just a 200) on the alternate counts, matching
+the literal "not 403" check rather than a narrower "grants 200"
+assumption nobody asked for.
+
+**One version step down only, not an exhaustive sweep** — Section
+7.24's text gives one example (`/v1/` bypassing `/v2/`'s denial); this
+tests exactly one step down, the same "don't invent unrequested
+variants" discipline XXE (item 85) already applied.
+
+**No `interactsh_client` declared**, same reasoning as items 88–91.
+
+**Verification:** `tests/core/scanners/test_api_versioning.py` — 15/15
+(new).
+
+**Files this entry covers:** `core/scanners/api_versioning.py` (new),
+`data/payloads/api_versioning_payloads.json` (stub → 1 real entry),
+`tests/core/scanners/test_api_versioning.py` (new, 15 tests).
+
+## 93. Batch 3 complete — all 5 scanners registered, full suite and both CI hooks re-verified together
+
+Closes out `crlf_injection`, `open_redirect`, `prototype_pollution`,
+`cors_scanner`, `api_versioning` (items 88–92) as one integrated unit,
+same convention items 80 and 87 established.
+
+**All 15 scanners built so far (Batch 1 + Batch 2 + Batch 3) import and
+register together with zero `SCANNER_REGISTRY` key collisions**,
+confirmed by importing all fifteen modules in one process and checking
+`SCANNER_REGISTRY` directly.
+
+**Three genuinely new injection shapes this batch introduced, on top of
+Batch 1/2's query-parameter-substitution and XXE's whole-body
+replacement:** appending a brand-new parameter
+(`prototype_pollution.py`), header-only with no payload file
+(`cors_scanner.py`), and URL-path-segment rewriting
+(`api_versioning.py`). Each reasoned through independently against its
+own actual mechanics, not forced into Batch 1/2's substitution shape
+for consistency's own sake.
+
+**`ExploitCandidate.parameter`'s no-single-parameter list grew by one
+this batch** (XXE, item 85, already extended it from four to five;
+`api_versioning.py`, item 92, extends it from five to six) — CORS and
+Host Header (both already in item 69's original four) needed no
+extension, confirmed rather than assumed, matching this project's
+standing "don't assume a prior batch's silence proves a case still
+holds" instruction generalized beyond `probe_correlation_id` to every
+recurring per-scanner field.
+
+**One real, flagged ontology gap carried forward, not silently
+closed:** `cors_scanner.py`'s `DEDUP_KEY` granularity limitation (item
+91) — three of CORS's four signals share an identical dedup key.
+Recorded for whoever next touches `DEDUP_KEY` or `ExploitCandidate`'s
+shape; not resolved unilaterally by this batch.
+
+**Two self-caught, self-fixed defects this batch, neither reaching a
+committed bundle:** `api_versioning.py`'s unused `payloads` parameter
+(item 92) and its module docstring's unescaped `\d` (item 92) — both
+caught by direct verification (reading the file against the payload
+file's own classification; running imports under `python3 -W error`),
+not eyeballing, and both fixed before this entry was written.
+
+**Full suite: 1261/1261** (1198 Batch-2-close baseline + 10 item 88 +
+11 item 89 + 12 item 90 + 15 item 91 + 15 item 92). Both CI hooks
+(`ci-scanner-http-check`, `ci-scope-diff`) green — no scanner file in
+this batch imports `httpx`/`requests` directly; no Go file touched this
+batch. Go suite: 32/32, re-run not assumed. `payload_inventory.py`:
+26 manifest entries, clean.
+
+**Files this entry covers:** none new — summary/verification entry
+over items 88–92's files.
+
+## 94. `mass_assignment.py` — Batch 4's first scanner (Section 7.26)
+
+**A fourth injection shape: whole-JSON-body with a baseline-plus-extra-
+field structure**, closer to `xxe_scanner.py`'s whole-body shape than
+Batch 1/2's substitution pattern, but unlike XXE's single fixed
+payload, this scanner constructs the body itself each time — a
+randomized baseline `username` field plus one extra, privilege-shaped
+field per payload entry.
+
+**Four privilege-escalation field names** (`isAdmin`, `is_admin`,
+`role`, `verified`), not just Section 7.26's one literal example —
+authored, same coverage-uncertainty justification as `cmd_injection.py`'s
+separator/OS variants (item 84): the uncertainty is which naming
+convention the target uses internally, not an invented extension of a
+singular technique.
+
+**Randomized baseline field, not the blueprint's literal `"test"`** —
+avoids unwanted side effects (duplicate-key/"already exists" errors) on
+a repeatedly-scanned real target.
+
+**Detection parses JSON first, falls back to string matching only for
+non-JSON responses** — robust to whitespace/key-ordering variation,
+verified directly against both cases before relying on it.
+
+**`ExploitCandidate.parameter` = the extra field's name, not `None`** —
+same reasoning as `prototype_pollution.py` (item 90): the field IS
+structurally a JSON body field with a name and a value, just newly-
+added rather than substituted.
+
+**Verification:** `tests/core/scanners/test_mass_assignment.py` — 15/15
+(new).
+
+**Files this entry covers:** `core/scanners/mass_assignment.py` (new),
+`data/payloads/mass_assignment_payloads.json` (stub → 4 real entries),
+`tests/core/scanners/test_mass_assignment.py` (new, 15 tests).
+
+## 95. `jwt_scanner.py` — Batch 4's second scanner (Section 7.13); PyJWT added as a real dependency, RS256→HS256 flagged as a genuine gap
+
+**Two of three named techniques built; RS256→HS256 confusion
+investigated and flagged, not skipped silently.** `alg:none` and
+weak-secret guessing are self-contained (they only need a token already
+found). RS256→HS256 confusion fundamentally requires the target's RSA
+public key (JWKS-endpoint discovery, PEM/JWK parsing) — infrastructure
+this project doesn't have. Not approximated with a guessed key: unlike
+weak-secret guessing, where a curated wordlist of commonly-reused
+literal secrets is well-established real-world practice, there's no
+comparable "commonly-reused RSA public key" list to draw from.
+
+**PyJWT added as a real dependency (`requirements.txt`) — a different
+call than the ysoserial decision (item 86), reasoned through
+separately, not defaulted from precedent.** PyJWT is a boring,
+standard encode/decode library — the JWT equivalent of `httpx` for
+HTTP — not an exploit-generation tool; it provides no "attack"
+capability of its own, this file still decides what claims to forge and
+which secrets to try. Verified directly before adding it: `jwt.encode`/
+`get_unverified_header`/`decode` round-tripped against real HS256
+tokens, confirming a weak-secret guess matching the real signing secret
+produces a token that verifies successfully against that secret.
+
+**Self-contained JWT discovery, the same test-account/session gap
+already flagged for the "Batch 7" scanners, worked around in
+miniature:** `scan(target_url: str)` has no way to receive an existing
+valid JWT as input. This scanner treats `target_url` as a candidate
+token-issuing endpoint, searches its response body and `Set-Cookie`
+header for a JWT-shaped string, and validates the match with an actual
+decode attempt — verified directly against both a real token and
+deliberately non-JWT dotted text (`"1.2.3"`, `"some.dotted.text"`)
+before trusting the regex alone.
+
+**Replay target is `target_url` itself — an imperfect approximation,
+flagged rather than oversold**, requiring the unauthenticated baseline
+to already be 401/403 before counting anything as a bypass (the same
+"baseline must show it's actually gated" shape `api_versioning.py`,
+item 92, established).
+
+**Weak-secret gated on the discovered token's own `alg` being
+`HS256`** — re-signing with a guessed secret is only a meaningful test
+if the token was HMAC-signed to begin with; `alg:none` is attempted
+regardless of the original algorithm.
+
+**`ExploitCandidate.parameter = None`** — a seventh extension to item
+69's list: this technique injects via the `Authorization` header, the
+same shape CORS's `Origin` and Host Header's `Host` already have — not
+`auth_scanner.py`'s own "Auth" case (Section 7.27, a different,
+not-yet-built scanner), a distinct finding for this scanner.
+
+**Verification:** `tests/core/scanners/test_jwt_scanner.py` — 17/17
+(new). One test-only bug caught and fixed along the way: an early
+attempt to construct an RS256 test token called a nonexistent PyJWT
+convenience method (`jwt.algorithms.RSAAlgorithm.generate_key`); fixed
+to generate the key via the `cryptography` library directly (already a
+PyJWT dependency, so no new package needed).
+
+**Files this entry covers:** `core/scanners/jwt_scanner.py` (new),
+`data/payloads/jwt_payloads.json` (stub → 6 real entries: 1 `alg_none`
++ 5 `weak_secret`), `requirements.txt` (`pyjwt` added),
+`tests/core/scanners/test_jwt_scanner.py` (new, 17 tests).
+
+## 96. `rate_limited_client.py` gains `credential_validation_allowlist` — a real, pre-existing infrastructure gap closed before `hardcoded_credentials.py` could be built
+
+**The gap, found by tracing `is_allowed()`'s exemption all the way
+down before writing any scanner code, not assumed working:**
+`is_allowed()` (Section 4.4/R-H4) has always taken an explicit
+`credential_validation_allowlist` parameter. `RateLimitedClient`'s own
+`caller_id` docstring already said the parameter existed "for the
+`credential_validation_allowlist` exemption... reserved for Week 6" —
+but `request()` never actually passed one to `is_allowed()`, so the
+exemption was unreachable through this class regardless of `caller_id`
+being correct. The same "anticipated in a docstring, never wired up"
+shape `is_allowed_outbound` turned out to have for `ssrf_scanner.py`
+(item 83) — except here, unlike `is_allowed_outbound` (which turned out
+not to be needed once traced through), the fix genuinely is required:
+`hardcoded_credentials.py` cannot reach any external validation API
+without it.
+
+**Fix: `RateLimitedClient.__init__` now accepts
+`credential_validation_allowlist: CredentialValidationAllowlist | None
+= None`, stored and passed to `is_allowed()` on every `request()`
+call.** `None` remains the default — every existing caller of this
+class is unaffected, confirmed by re-running this file's own 17
+pre-existing tests, plus the full 1299-test suite, unmodified before
+and after.
+
+**Verification:** `tests/core/http/test_rate_limited_client.py` — 17
+pre-existing (confirmed identical) + 6 new
+(`TestRateLimitedClientCredentialValidationAllowlist`), covering:
+correct `caller_id` + enabled allowlist permits an out-of-scope host;
+wrong `caller_id` still blocks even with an enabled allowlist; correct
+`caller_id` but disabled allowlist blocks; correct `caller_id` but host
+not in `external_apis` blocks; no allowlist provided defaults to `None`
+and blocks (existing behavior, unaffected); an in-scope host is
+unaffected by the allowlist's mere presence. Full suite: 1299/1299
+(1261 Batch-3-close baseline + 15 `mass_assignment.py` + 17 `jwt_
+scanner.py`, both already built by this point in the batch, + 6 new
+here — this arithmetic re-verified in Python before being written, not
+eyeballed, after an early draft of item 100's own summary got the
+equivalent sum wrong and had to be corrected there too).
+
+**Files this entry covers:** `core/http/rate_limited_client.py`
+(constructor + `request()` + module docstring), `tests/core/http/
+test_rate_limited_client.py` (`_client` helper extended, 6 new tests
+in a new class, all 17 pre-existing tests unmodified).
+
+## 97. `hardcoded_credentials.py` — Batch 4's third scanner (Section 7.28); `caller_id` gating treated with the rigor Waild's directive required, live validation for 2 of 4 detectable providers, and Microsoft Graph excluded after checking current documentation caught a fabricated pattern
+
+**The `caller_id` requirement, proven end-to-end, not just asserted:**
+this scanner never types the literal string `"hardcoded_credentials"`
+anywhere — it reads `self.session.caller_id` (already correct via
+`create_scanner`'s existing `caller_id=scanner_id` wiring, item 82) and
+reuses it verbatim when constructing its own internal validation
+client (`self._validation_session`). One source of truth —
+`SCANNER_REGISTRY`'s own key — never re-typed as a second literal that
+could drift from it, item 22's 29-vs-28 list-drift precedent applied
+directly. `test_validation_session_caller_id_matches_injected_session_
+exactly` and `test_wrong_caller_id_blocks_validation_even_with_enabled_
+allowlist` prove this through the real `RateLimitedClient`/
+`is_allowed()` stack (item 96), not a mock of the gating logic.
+
+**Two sessions, deliberately:** `self.session` (injected, scoped to
+the target's domains) fetches the JS being scanned; a second,
+internally-constructed `RateLimitedClient`
+(`scope_domains=[]`) makes external validation calls. Empty
+`scope_domains` is a deliberate safety property: with nothing in normal
+scope, this client can ONLY ever reach a host via the
+`credential_validation_allowlist` exemption — it structurally cannot be
+misused to reach the target's own domains, even by a future bug in this
+file. `test_validation_session_has_empty_scope_domains` confirms this
+directly.
+
+**Live validation for 2 of 4 detectable providers (Stripe, Google
+Maps); AWS and Twilio pattern-matched but unvalidated; Microsoft Graph
+has no pattern at all — each gap individually investigated:** Stripe
+and Google Maps use a single bearer/query-string key — a plain GET
+either succeeds or doesn't, safely implementable, both endpoints
+confirmed GET-only and read-only before use. AWS requires SigV4 request
+signing AND a paired secret access key (a single regex match on an
+access key ID alone cannot authenticate anything). Twilio needs a
+paired Account SID + Auth Token located near each other in the same
+JS — a "find related values together" pattern this file's simple
+per-pattern scan doesn't attempt. Both AWS and Twilio still surface as
+findings on a bare pattern match, matching Section 7.28's own TIER_D
+fallback text — `payload_used` says plainly that validation wasn't
+attempted and why, since neither TIER_D assignment nor `TelegramBot`
+exist yet for this scanner to actually hand off to.
+
+**Microsoft Graph: a mistake caught by checking current documentation
+before shipping, not by luck.** An early draft's pattern required a
+literal `"8Q~"` substring. Web search against Microsoft's own current
+Sensitive Information Type documentation and a gitleaks maintainer
+thread (Oct 2024) established two things: (1) Microsoft's own
+illustrative example credential contains `"7Q~"`, not `"8Q~"` — the
+draft pattern was almost certainly a garbled half-memory of that
+example, mistaken for a real structural signature; (2) even the
+correct broad pattern (Microsoft's own documented `[-_.~a-zA-Z0-9]`,
+"up to 40 characters") is one the wider secret-scanning community has
+explicitly not converged on a more specific version of either. Rather
+than ship a broad, high-false-positive pattern with a vague caveat,
+Graph detection is left out of `hardcoded_credentials_patterns.json`
+entirely — confirmed by `test_real_pattern_file_has_four_entries_not_
+five` and `test_no_bogus_8q_tilde_substring_anywhere`, not merely
+described in prose.
+
+**Known placeholder exclusion** (AWS's own documented example key,
+`AKIAIOSFODNN7EXAMPLE`) prevents flagging harmless, widely-copied
+documentation examples.
+
+**`ExploitCandidate.parameter = None`** — an eighth extension to item
+69's list: this scanner injects nothing at all, it passively scans
+fetched content, with no query/body parameter and no header involved.
+
+**Verification:** `tests/core/scanners/test_hardcoded_credentials.py` —
+17/17 (new), including full end-to-end proof (real `RateLimitedClient`
++ real `is_allowed()`, not mocked) that a `credential_validation_
+allowlist`-carrying validation session genuinely reaches
+`api.stripe.com` despite `scope_domains=[]`.
+
+**Files this entry covers:** `core/scanners/hardcoded_credentials.py`
+(new), `data/payloads/hardcoded_credentials_patterns.json` (stub → 4
+real entries, `patterns` key not `payloads` — `pattern_library` schema,
+Section 3.1), `tests/core/scanners/test_hardcoded_credentials.py` (new,
+17 tests).
+
+## 98. `graphql_scanner.py` — Batch 4's fourth scanner (Section 7.23)
+
+**Three techniques, matching Section 7.23's text exactly.**
+Introspection and IDOR-schema-discovery share one request (a single
+rich introspection query asking for `queryType`, `types`, `fields`, and
+each field's `args`), not two — simpler control flow, and Fast Lane
+doesn't need to economize one extra field in an already-cheap request
+the way it needs to economize whole HTTP round-trips.
+
+**IDOR via ID queries is schema-discovered, not guessed, and
+self-contained the same way `jwt_scanner.py` (item 95) is:** real
+GraphQL IDOR testing compares two different accounts' access to the
+same object; this project has no test-account infrastructure yet. This
+technique instead finds any query-type field with an `id` argument via
+introspection and queries it with two different ID values under
+whatever session `self.session` already carries, selecting only the
+universal `__typename` meta-field so no knowledge of the field's actual
+return type is needed — a weaker, single-session approximation of true
+cross-account IDOR, flagged as such rather than oversold, verified
+directly (`_find_id_query_field` tested against a schema with a
+matching field, one without, and a disabled-introspection response).
+
+**Batching abuse also uses `__typename`, not a destructive probe** —
+sends a JSON-array batch of harmless queries at an authored, modest
+size and checks whether the server processed the full batch rather
+than rejecting or truncating it.
+
+**`ExploitCandidate.parameter` differs by technique within this one
+scanner:** introspection and batching are whole-body techniques with no
+distinguishable parameter (`None`, the same shape XXE/
+`api_versioning.py`/`jwt_scanner.py`/`hardcoded_credentials.py` already
+have — a ninth extension to item 69's list, but only for these two of
+three signals). The IDOR-via-ID signal has a genuine, nameable thing
+being tested — the discovered field name — the same "newly-discovered
+but still a real name" reasoning `prototype_pollution.py`/
+`mass_assignment.py` already established.
+
+**Verification:** `tests/core/scanners/test_graphql_scanner.py` —
+16/16 (new).
+
+**Files this entry covers:** `core/scanners/graphql_scanner.py` (new),
+`data/payloads/graphql_payloads.json` (stub → 1 real entry — batching
+only; introspection/IDOR use fixed query strings, not payload-file-
+driven content), `tests/core/scanners/test_graphql_scanner.py` (new,
+16 tests).
+
+## 99. `oauth_scanner.py` — Batch 4's fifth and final scanner (Section 7.14); a self-caught design bug in the acceptance check, not just a test-authoring mistake this time
+
+**redirect_uri manipulation and token leakage are one probe, two
+possible signals, read together per Section 7.14's own "Safe exploit"
+line**, which describes exactly what "token leakage" means
+operationally: the code/token following an accepted, attacker-
+controlled `redirect_uri`. `_has_oauth_response_params` checks Location
+for `code`/`access_token`/`token` as real parsed query/fragment KEYS
+via `urllib.parse`, not a substring search — verified directly that a
+param merely named `statuscode` doesn't false-positive on the substring
+`code` before relying on it.
+
+**Three `redirect_uri` variants** — a plain attacker URL, and two
+well-documented real-world bypasses of naive prefix/substring
+`redirect_uri` validation (an `@`-trick and a subdomain-suffix trick,
+both built from `target_url`'s own extracted host) — authored, same
+coverage-uncertainty justification as `cmd_injection.py`'s separator/OS
+variants.
+
+**Only `redirect_uri` is tested, not every existing query parameter —
+a deliberate departure from `open_redirect.py`'s broader approach
+(item 89), not a narrower shortcut:** `open_redirect.py` tests every
+parameter because Section 7.19 names its examples as just that,
+examples. OAuth's `redirect_uri` is a standardized parameter name (RFC
+6749) with no equivalent naming uncertainty — testing only it is the
+more precise choice.
+
+**A real design bug, caught by my own test, not a test-authoring
+mistake:** a first draft copied `open_redirect.py`'s `location ==
+payload` exact-match check. That's correct for `open_redirect.py`,
+where a bare redirect is the whole signal, but wrong here — a
+genuinely leaking OAuth response NECESSARILY appends `?code=...` or
+`#access_token=...` to the injected `redirect_uri`, so `location` could
+never equal the bare payload exactly in the exact scenario this
+scanner most needs to catch. `test_accepted_redirect_uri_with_code_
+produces_two_candidates` (written to prove leakage detection) failed
+against the exact-match version with 0 candidates instead of 2 — that
+failure is what caught it, not a code review. Fixed to `location.
+startswith(payload)`, safe here specifically because `payload` is this
+scanner's own just-injected value, not an untrusted external string
+being matched against something else.
+
+**State absence only; state reuse not attempted — a real, flagged gap,
+same test-flow-state shape already flagged for `jwt_scanner.py` (item
+95) and the "Batch 7" scanners:** "state absence" is a single-request
+comparison (the authorization URL with `state` removed, checked
+against baseline), directly testable. "State reuse" requires completing
+an authorization flow and replaying the same `state` value across a
+second, separate attempt — multi-step flow tracking this project has no
+infrastructure for. Not approximated with a single-request check that
+would prove nothing about actual reuse.
+
+**`ExploitCandidate.parameter` is a real value for both techniques, no
+extension to item 69's list needed** — `redirect_uri` and `state` are
+both genuine, named query parameters, fitting Batch 1/2's original
+shape cleanly, unlike several of this session's other Batch 3/4
+scanners.
+
+**Verification:** `tests/core/scanners/test_oauth_scanner.py` — 20/20
+(new, after the startswith fix; 19/20 before it, with the one failure
+being the design bug above, not a flaky or incorrect test).
+
+**Files this entry covers:** `core/scanners/oauth_scanner.py` (new),
+`data/payloads/oauth_payloads.json` (stub → 3 real entries),
+`tests/core/scanners/test_oauth_scanner.py` (new, 20 tests).
+
+## 100. Batch 4 complete — all 5 scanners registered, full suite and both CI hooks re-verified together
+
+Closes out `mass_assignment`, `jwt_scanner`, `hardcoded_credentials`,
+`graphql_scanner`, `oauth_scanner` (items 94–99), plus the
+`rate_limited_client.py` infrastructure fix (item 96) that made item
+97 possible, as one integrated unit — same convention items 80, 87,
+and 93 established.
+
+**All 20 scanners built so far (Batches 1–4) import and register
+together with zero `SCANNER_REGISTRY` key collisions**, confirmed by
+importing all twenty modules in one process and checking
+`SCANNER_REGISTRY` directly.
+
+**One real, pre-existing infrastructure gap found and closed before
+the scanner that needed it could be built** (item 96) — the same
+"anticipated in a docstring, never wired up, caught by the first real
+caller" shape `is_allowed_outbound` had for `ssrf_scanner.py` (item
+83), except here the fix genuinely was needed once traced through,
+unlike `is_allowed_outbound`. `RateLimitedClient` now correctly carries
+`credential_validation_allowlist` through to `is_allowed()`, proven via
+6 new tests plus the full pre-existing suite re-run unmodified.
+
+**One real dependency added, reasoned through independently of the
+ysoserial precedent** (item 95, PyJWT) — a boring, standard encode/
+decode library, not an exploit-generation tool, verified against real
+tokens before being trusted.
+
+**Two provider/technique gaps investigated and flagged rather than
+faked** (item 95's RS256→HS256 confusion, item 97's AWS/Twilio
+validation and Microsoft Graph detection) — each with its own
+independently-reasoned cause (missing JWKS-discovery infrastructure;
+missing SigV4 signing and paired-secret discovery; a pattern the wider
+security community itself hasn't converged on), not a single blanket
+excuse reused across all of them.
+
+**`ExploitCandidate.parameter`'s no-single-parameter list grew by three
+this batch** (`jwt_scanner.py`, item 95 — 7th; `hardcoded_credentials.py`,
+item 97 — 8th; `graphql_scanner.py`'s introspection/batching signals,
+item 98 — 9th) — `mass_assignment.py` and `oauth_scanner.py` both
+confirmed they fit the ORIGINAL substitution/addition shapes cleanly,
+needing no extension, checked per-scanner rather than assumed.
+
+**One design bug (not a test-authoring mistake) caught by a test
+written to prove the thing it ended up disproving** (`oauth_scanner.py`,
+item 99) — the clearest example this batch of the project's own
+standing principle that bugs get caught before commit, by running code,
+not by review.
+
+**One incidental repository-hygiene gap found and fixed while preparing
+this batch's commit, unrelated to any scanner's own logic:**
+`data/telemetry/large_bodies/` (Section 10.5's own documented
+`InterceptingClient` output directory for response bodies over the 8 KB
+cap) was untracked by `.gitignore` — never triggered by any prior
+batch's tests, first triggered here by this batch's own 2000-character
+filler strings used to test `raw_response_snapshot` truncation across
+several scanners. `.gitignore` now covers `data/telemetry/`.
+
+**Full suite: 1352/1352** (1261 Batch-3-close baseline + 15 item 94 +
+17 item 95 + 6 item 96 + 17 item 97 + 16 item 98 + 20 item 99 — this
+breakdown itself re-computed and verified before being written here: an
+earlier draft of this sentence gave a wrong baseline figure and omitted
+item 96's 6 tests as their own term, summing to 1368, not 1352; caught
+by actually running the arithmetic in Python against the real recorded
+test counts from each item's own verification, not by re-reading the
+sentence). Both CI hooks (`ci-scanner-http-check`, `ci-scope-diff`)
+green — no scanner file in this batch imports `httpx`/`requests`
+directly; no Go file touched this batch. Go suite: 32/32, re-run not
+assumed. `payload_inventory.py`: 26 manifest entries, clean.
+
+**Files this entry covers:** none new — summary/verification entry
+over items 94–99's files.

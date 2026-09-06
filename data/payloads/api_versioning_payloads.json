@@ -2,6 +2,11 @@
   "_file_type": "injectable_payload",
   "_scanner": "api_versioning",
   "_notes": "/v1/ vs /v2/ access tests",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside api_versioning",
-  "payloads": []
+  "_status": "Real payload added Week 7 Batch 3 (docs/DECISIONS.md item 92). Schema: id, pattern (a regex with one capturing group around the version digits -- read and applied by api_versioning.py's _find_lower_version_url, not hardcoded as a Python constant; see that file's module docstring's 'PATTERN LIVES IN THE PAYLOAD FILE' section for why an earlier draft's unused payloads parameter was caught and fixed). One entry: a substring search (not anchored to the path's start), so it already matches both /v2/admin and /api/v2/admin-shaped URLs without needing a second pattern -- verified before deciding one entry was sufficient.",
+  "payloads": [
+    {
+      "id": "path_version_segment",
+      "pattern": "/v(\\d+)/"
+    }
+  ]
 }

@@ -2,6 +2,36 @@
   "_file_type": "injectable_payload",
   "_scanner": "jwt_scanner",
   "_notes": "alg:none, RS256->HS256, weak secrets",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside jwt_scanner",
-  "payloads": []
+  "_status": "PARTIAL -- alg:none and weak_secret only (docs/DECISIONS.md item 95). RS256->HS256 confusion deliberately NOT included: it requires discovering the target's RSA public key (JWKS-endpoint parsing) to use as the forged token's HMAC secret -- infrastructure this project doesn't have yet, and unlike weak-secret guessing there is no comparable curated list of commonly-reused RSA public keys to draw from instead. See jwt_scanner.py module docstring. Schema: id, technique ('alg_none' | 'weak_secret'), secret (weak_secret entries only -- the literal HMAC secret guessed). The weak_secret wordlist includes jwt.io's own debugger-page default placeholder ('your-256-bit-secret'), well-documented as a common real-world finding when developers copy a jwt.io example into production without changing it.",
+  "payloads": [
+    {
+      "id": "alg_none_strip_signature",
+      "technique": "alg_none"
+    },
+    {
+      "id": "weak_secret_literal_secret",
+      "technique": "weak_secret",
+      "secret": "secret"
+    },
+    {
+      "id": "weak_secret_password",
+      "technique": "weak_secret",
+      "secret": "password"
+    },
+    {
+      "id": "weak_secret_123456",
+      "technique": "weak_secret",
+      "secret": "123456"
+    },
+    {
+      "id": "weak_secret_changeme",
+      "technique": "weak_secret",
+      "secret": "changeme"
+    },
+    {
+      "id": "weak_secret_jwtio_default",
+      "technique": "weak_secret",
+      "secret": "your-256-bit-secret"
+    }
+  ]
 }

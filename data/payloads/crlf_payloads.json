@@ -2,6 +2,13 @@
   "_file_type": "injectable_payload",
   "_scanner": "crlf_injection",
   "_notes": "\\r\\n header injection sequences",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside crlf_injection",
-  "payloads": []
+  "_status": "Real payload added Week 7 Batch 3 (docs/DECISIONS.md item 88). Schema: id, payload (a real \\r\\n character, NOT pre-percent-encoded -- iter_query_param_injections's own urlencode() does the single-pass encoding; see crlf_injection.py module docstring), probe_header_name, probe_header_value (what the response header must equal for a positive signal -- header-based check, not a body substring search). Section 7.17's own literal example, verbatim: '%0d%0aX-XBOW-PROBE: 1'.",
+  "payloads": [
+    {
+      "id": "single_header_injection",
+      "payload": "\r\nX-XBOW-PROBE: 1",
+      "probe_header_name": "X-XBOW-PROBE",
+      "probe_header_value": "1"
+    }
+  ]
 }

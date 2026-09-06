@@ -2,6 +2,27 @@
   "_file_type": "injectable_payload",
   "_scanner": "mass_assignment",
   "_notes": "Extra field injection",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside mass_assignment",
-  "payloads": []
+  "_status": "Real payloads added Week 7 Batch 4 (docs/DECISIONS.md item 94 -- Batch 4's first entry). Schema: id, field_name, field_value. Four privilege-escalation field-name conventions, not just Section 7.26's one literal example -- authored, same coverage-uncertainty justification as cmd_injection.py's separator/OS variants; see mass_assignment.py module docstring.",
+  "payloads": [
+    {
+      "id": "is_admin_camel",
+      "field_name": "isAdmin",
+      "field_value": true
+    },
+    {
+      "id": "is_admin_snake",
+      "field_name": "is_admin",
+      "field_value": true
+    },
+    {
+      "id": "role_admin",
+      "field_name": "role",
+      "field_value": "admin"
+    },
+    {
+      "id": "verified_flag",
+      "field_name": "verified",
+      "field_value": true
+    }
+  ]
 }
