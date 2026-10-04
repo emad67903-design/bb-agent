@@ -4969,3 +4969,190 @@ against this corrected 9-item list, not the stale 8, when its own
 
 **Files this entry covers:** none -- documentation-accuracy entry; no
 code changed.
+
+## 103. How a scanner reaches its own Go sidecar -- a second, 127.0.0.1-scoped `RateLimitedClient`, not a new HTTP module and not `self.session`
+
+**The gap, confirmed before writing any scanner code, not discovered by
+trial and error:** Section 7.21 (`http_smuggling.py`) and Section 7.5
+(`race_scanner.py`, pre-investigated this batch at item 105 but not yet
+built) are this project's first two scanners whose detection work
+happens in a Go sidecar (`smuggling_engine`/`race_engine`,
+`127.0.0.1:18081`/`:18080`) rather than directly against `target_url`.
+Read `base_scanner.py`'s full contract and `scope_enforcer.py`'s full
+`is_allowed()` source before writing anything: `self.session` (every
+scanner's `RateLimitedClient`) is scoped to the program's own
+`scope_domains`, with exactly two ways to pass -- `_is_scope_allowed`
+(the target's own scope list) or the `credential_validation_allowlist`
+exemption (`hardcoded_credentials.py` only, item 82). Neither covers
+`127.0.0.1`. A scanner calling its own sidecar through `self.session`
+would raise `OutOfScopeError` every time, confirmed by reading the
+function, not by running it and hitting the error first.
+
+**Decision: a second `RateLimitedClient` instance, scoped only to
+`127.0.0.1`, constructed by the scanner and injected the same way
+`payloads` already is.** Not a new module, not a direct `httpx` import,
+not a change to `scope_enforcer.py`'s shared logic:
+
+  - Still "the one HTTP layer, no exceptions" (Engineering
+    Constitution) -- it is the exact same `RateLimitedClient` class
+    every other scanner already uses, constructed a second time with a
+    different, narrower `scope_domains` list.
+  - Still passes `make ci-scanner-http-check` -- no scanner file gains
+    a direct `httpx`/`requests` import; `RateLimitedClient` is imported
+    the same way `base_scanner.py` already requires.
+  - Does not touch `scope_enforcer.py`, `rate_limited_client.py`, or
+    any other shared file -- zero blast radius onto the 20 scanners
+    already built, confirmed by re-running the full suite after this
+    decision was implemented (1371/1371 at that point, zero new
+    failures -- see item 104's verification).
+  - Matches Section 10.2's own architecture, not an invented
+    workaround for it: "Go `scope_guard.go` (Go services, independent
+    layer)" already lists Go-side scope enforcement as separate from
+    `RateLimitedClient` (Python HTTP). The Go service independently
+    re-validates `target_url` (embedded in the request body, not the
+    URL Python connects to) against its own `-scope-json` file before
+    touching the network -- confirmed by reading `handleSmuggle` in
+    `services/smuggling_engine/smuggling.go`, which returns 403 when
+    `!s.guard.IsAllowed(req.TargetURL)`. Python's scope check here
+    governs "is it OK to talk to this local service" (trivially yes,
+    the only valid destination is the agent's own sidecar); the Go
+    service's own check governs "is it OK to attack this target."
+    These are genuinely two different questions, asked at two
+    genuinely different layers -- using one `RateLimitedClient`
+    instance for each does not blur that, since each instance carries
+    its own, independent `scope_domains`.
+
+**Alternatives considered and rejected:**
+  1. *Add a `127.0.0.1`/Go-sidecar carve-out to `scope_enforcer.py`
+     itself*, mirroring the existing `interactsh.com`/metadata-host
+     carve-outs. Rejected: conflates "is this URL in the bug-bounty
+     program's scope" (what `scope_enforcer.py` exists to answer, per
+     Section 10.2) with "is this URL our own local infrastructure" (an
+     unrelated question) inside one shared, security-critical function
+     every scanner depends on -- raises that function's blast radius
+     for every future change, for no benefit the per-scanner second-
+     client approach doesn't already provide.
+  2. *A new `core/http/go_service_client.py` module*, parallel to
+     `intercepting_client.py`. Rejected as unnecessary complexity: it
+     would still need to end up wrapping `RateLimitedClient` (or
+     duplicate its rate-limiting/interception logic) to stay within
+     "one HTTP layer" in spirit, and testing it would need its own,
+     separate mocking strategy -- whereas reusing `RateLimitedClient`
+     directly means `http_smuggling.py`'s tests mock the Go-sidecar
+     call exactly the same way every other scanner's tests already mock
+     `self.session` (`httpx.MockTransport` + `InterceptingClient`),
+     confirmed working in item 104's test file, not just assumed.
+
+**Rate limit:** `requests_per_second=100.0` for the sidecar client, not
+Section 10.3's `10 req/sec/host` target default -- this is a loopback
+call to the agent's own process, not traffic against a program's
+target, so the politeness rationale behind the 10 req/sec default does
+not apply; named explicitly in `_default_go_service_client()` rather
+than silently reusing the target-facing default.
+
+**Blast radius:** this batch, only `http_smuggling.py` uses this
+pattern. `race_scanner.py` (not built this batch -- item 105 is a
+pre-investigation only) will need the identical mechanism when it is
+written; recorded here, once, so that scanner's author is not left to
+re-derive this from scratch or invent a second, divergent approach.
+
+**Files this entry covers:** none directly -- infrastructure decision,
+realized in `core/scanners/http_smuggling.py` (item 104); no file under
+`core/http/` or `core/governance/` was modified.
+
+## 104. `http_smuggling.py` -- Batch 5's first scanner (Section 7.21); this project's first Go-sidecar-backed scanner, and the 10th `parameter=None` extension
+
+**Division of labor matches `smuggling.go`'s own header comment, not
+assumed from the wire contract alone:** Go performs only raw socket
+I/O against already-built bytes (dial, write, read-with-deadline,
+classify `timed_out`); this file builds the two raw HTTP/1.1 request
+byte sequences and interprets the Go service's own pre-computed
+`vulnerable` verdict. No target-response parsing happens in Python at
+all for this scanner -- confirmed directly by a dedicated test
+(`test_self_session_receives_zero_requests`) that asserts the target-
+scoped `self.session` receives exactly zero requests during a scan,
+not just that the scanner "seems to" rely on the Go service.
+
+**Byte templates verified against PortSwigger's own published
+technique before being stored, not authored from memory of the
+general CL.TE/TE.CL concept:** `https://portswigger.net/web-security/
+request-smuggling/finding`, "Finding CL.TE/TE.CL vulnerabilities using
+timing techniques." Both templates' body lengths were checked against
+their own declared `Content-Length` header in Python before being
+written to `http_smuggling_payloads.json`, and that same check is
+pinned as its own test (`test_real_payload_bodies_are_byte_exact_
+against_declared_content_length`) so a future edit to either template
+cannot silently break the mismatch the probe depends on.
+
+**Two-file payload split matches Section 3.1's own file-tree listing
+for this one scanner (`smuggling_configs.json` + `http_smuggling_
+payloads.json`), not an arbitrary division:** `smuggling_configs.json`
+declares which variant types exist (`CL.TE`/`TE.CL`, matching
+`smuggling.go`'s own `"type"` wire field exactly); `http_smuggling_
+payloads.json` holds each type's raw byte template. Both were still
+Week-0 stub files (`"payloads": []`) going into this batch -- confirmed
+directly before writing either one, same discipline every prior
+batch's payload-file work has followed (e.g. item 89's redirect_
+payloads.json catch).
+
+**`payload_engine.py` bypassed, not waited on -- confirmed absent, not
+assumed:** `smuggling.go`'s own header comment names `payload_
+engine.py` as the intended long-term builder of the raw bytes, but it
+does not exist in this repository (`find . -iname payload_engine.py`
+returns nothing) and building the general-purpose engine is not this
+batch's scope. This file does the narrow equivalent directly (a plain
+`str.format(host=.., path=..)` against the two stored templates). See
+`core/scanners/http_smuggling.py`'s module docstring for the full
+reasoning; flagged here as a documented judgment call, not a silent
+shortcut.
+
+**New infrastructure pattern, not invented inline -- see item 103 for
+the full reasoning:** this scanner reaches `smuggling_engine` at
+`127.0.0.1:18081` through a second, independently-scoped
+`RateLimitedClient` (`go_service_client`), since `self.session` is
+scoped to the bug-bounty program's own `scope_domains` and would
+reject `127.0.0.1` outright.
+
+**`ExploitCandidate.parameter = None` -- THE 10TH EXTENSION, against
+item 102's corrected 9-item count, not the stale 8 `prompt_1_.md`
+carried in:** Section 7.21's signal is a connection-level timing
+differential between two whole raw requests -- there is no single
+query/body parameter or header value that "is" the injected thing the
+way every other `None`-case scanner's technique has one. Both raw
+requests, in their entirety, are the payload.
+
+**`http_method = "POST"`** -- both raw templates are POST requests; a
+smuggling probe needs a request body to desync the two parsers'
+chunk/length framing against each other, which GET's typically-empty
+body cannot provide.
+
+**No `interactsh_client` declared** -- Section 7.21's own evidence line
+is `timing_anomaly + differential = 2`, not `oob_interaction`. Same
+precedent as `crlf_injection.py` (item 88) and every other non-OOB
+scanner; confirmed directly via `inspect.signature`
+(`test_no_interactsh_client_parameter`), not left to prose alone.
+
+**Go-service-error handling is a new, documented shape for this first
+Go-backed scanner:** a non-200 from the sidecar (e.g. a scope
+misconfiguration between this agent's `scope_domains` and the Go
+service's own `-scope-json` file) is logged
+(`[HTTP_SMUGGLING_GO_SERVICE_ERROR]`) and degrades to `[]` -- the same
+"log a bracketed tag, return no candidates" shape `host_header.py`'s
+OOB-unavailable path already established -- rather than being raised,
+since an infrastructure-layer mismatch is not itself evidence for or
+against the vulnerability. A hard connection failure to the sidecar
+itself is NOT caught here and propagates normally, matching every
+other scanner's unwrapped `self.session.request()` call.
+
+**Verification:** `tests/core/scanners/test_http_smuggling.py` --
+19/19 (new). Full suite: **1371/1371** (1352 + 19). Both CI hooks
+(`ci-scanner-http-check`, `ci-scope-diff`) green. `SCANNER_REGISTRY`:
+21 entries, zero collisions (confirmed by importing all 21 scanner
+modules in one process). `payload_inventory.py`: still 26 manifest
+entries, clean (this batch fills in two already-counted stubs, it
+doesn't add new files to the manifest).
+
+**Files this entry covers:** `core/scanners/http_smuggling.py` (new),
+`data/payloads/smuggling_configs.json` (stub -> 2 real entries),
+`data/payloads/http_smuggling_payloads.json` (stub -> 2 real entries),
+`tests/core/scanners/test_http_smuggling.py` (new, 19 tests).

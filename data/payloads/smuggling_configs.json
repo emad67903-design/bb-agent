@@ -2,6 +2,17 @@
   "_file_type": "injectable_payload",
   "_scanner": "http_smuggling",
   "_notes": "CL vs TE variants",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside http_smuggling",
-  "payloads": []
+  "_status": "Real payload added Week 7 Batch 5 (docs/DECISIONS.md item 104). Schema: id, type (CL.TE or TE.CL -- matches services/smuggling_engine/smuggling.go's wire contract \"type\" field exactly, confirmed against the Go file's own header comment, not assumed), description. Declares WHICH variants http_smuggling.py tests; the raw byte templates themselves live in http_smuggling_payloads.json, keyed by this same \"type\" value -- the split mirrors this file's own _notes (\"CL vs TE variants\": which variants) against the other file's (\"Raw-byte variants\": their bytes).",
+  "payloads": [
+    {
+      "id": "cl_te_timing",
+      "type": "CL.TE",
+      "description": "Front-end trusts Content-Length, back-end trusts Transfer-Encoding. A time delay on this probe (vs. a normal, fast response) indicates the back-end is left waiting for chunk-framing bytes the front-end never forwarded."
+    },
+    {
+      "id": "te_cl_timing",
+      "type": "TE.CL",
+      "description": "Front-end trusts Transfer-Encoding, back-end trusts Content-Length. A time delay on this probe indicates the back-end is left waiting for body bytes the front-end, having already seen the terminating 0-length chunk, never forwarded."
+    }
+  ]
 }

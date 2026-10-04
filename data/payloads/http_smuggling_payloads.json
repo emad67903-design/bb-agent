@@ -2,6 +2,15 @@
   "_file_type": "injectable_payload",
   "_scanner": "http_smuggling",
   "_notes": "Raw-byte variants",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside http_smuggling",
-  "payloads": []
+  "_status": "Real payload added Week 7 Batch 5 (docs/DECISIONS.md item 104). Schema: type (matches smuggling_configs.json's \"type\"), raw_request_template (a raw HTTP/1.1 request with {method}/{path}/{host} format placeholders, sent byte-for-byte, base64-encoded, as services/smuggling_engine/smuggling.go's wire contract's raw_request_b64 field). The Content-Length/chunked-encoding mismatch in each template is the probe itself, not a bug -- a correctly-framed request would never produce the timing differential this scanner looks for. Exact byte sequences are PortSwigger's own published timing-technique examples (https://portswigger.net/web-security/request-smuggling/finding, \"Finding CL.TE/TE.CL vulnerabilities using timing techniques\"), verified against that source before being stored here, not invented: CL.TE's body is exactly 7 bytes (\"1\\r\\nA\\r\\nX\") against a declared Content-Length of 4 (the front-end forwards only \"1\\r\\nA\", a chunk-size line plus 1 byte of chunk data with no terminating CRLF -- the back-end, parsing chunked encoding, then waits for the CRLF that never arrives). TE.CL's body is exactly 6 bytes (\"0\\r\\n\\r\\nX\") against a declared Content-Length of 6 (the front-end, parsing chunked encoding, treats the leading \"0\\r\\n\\r\\n\" as a complete, already-terminated chunked body -- a 0-length chunk always ends chunked framing -- and forwards only those 4 bytes; the back-end, parsing Content-Length, then waits for the 2 bytes that were never sent).",
+  "payloads": [
+    {
+      "type": "CL.TE",
+      "raw_request_template": "POST {path} HTTP/1.1\r\nHost: {host}\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\n1\r\nA\r\nX"
+    },
+    {
+      "type": "TE.CL",
+      "raw_request_template": "POST {path} HTTP/1.1\r\nHost: {host}\r\nTransfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n0\r\n\r\nX"
+    }
+  ]
 }
