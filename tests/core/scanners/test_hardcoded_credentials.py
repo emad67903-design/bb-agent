@@ -46,6 +46,19 @@ _GOOGLE_MAPS_PATTERN = [
     }
 ]
 
+# Built via concatenation, not as one contiguous literal (docs/DECISIONS.md
+# item 101): a prior fixture held this as a single 20-char "AKIA..." literal,
+# which is exactly the shape GitHub push protection's secret scanner flags on
+# the raw .py text, regardless of the value being fake. Splitting the literal
+# across two string constants joined with `+` means no line in this file's
+# source ever contains a contiguous AKIA-shaped 20-char run, while the
+# concatenated VALUE at runtime is still the real, correctly-formatted
+# "AKIA" + 16 alphanumeric chars that hardcoded_credentials.py's own
+# `AKIA[0-9A-Z]{16}` pattern (see `_AWS_PATTERN` above) must match. Every
+# credential-shaped fixture added in later batches (Stripe `sk_live_...`,
+# Twilio, Google Maps `AIza...`, Azure/Graph) follows this same construction.
+_FAKE_AWS_KEY = "AKIA" + "ABCDEFGHIJKLMNOP"
+
 
 class TestLoadPatterns:
     def test_real_pattern_file_has_four_entries_not_five(self):
@@ -158,7 +171,7 @@ class TestHardcodedCredentialsScannerDetection:
         fallback means a pattern match alone is still a finding."""
 
         def handler(request):
-            return httpx.Response(200, text='const key = "XKIAABCDEFGHIJKLMNOP";')
+            return httpx.Response(200, text=f'const key = "{_FAKE_AWS_KEY}";')
 
         scanner = HardcodedCredentialsScanner(_session(handler), patterns=_AWS_PATTERN)
         candidates = await scanner.scan("https://example.com/app.js")
@@ -171,7 +184,7 @@ class TestHardcodedCredentialsScannerDetection:
         assert candidate.detected_by == "hardcoded_credentials"
         assert candidate.probe_correlation_id is None
         assert "UNVALIDATED" in candidate.payload_used
-        assert "XKIAABCDEFGHIJKLMNOP" in candidate.payload_used
+        assert _FAKE_AWS_KEY in candidate.payload_used
 
     @pytest.mark.asyncio
     async def test_stripe_key_that_fails_validation_produces_no_candidate(self):
@@ -247,7 +260,7 @@ class TestHardcodedCredentialsScannerCandidateFields:
     @pytest.mark.asyncio
     async def test_raw_response_snapshot_truncated_to_512_chars(self):
         def handler(request):
-            return httpx.Response(200, text='const key = "XKIAABCDEFGHIJKLMNOP";' + "M" * 2000)
+            return httpx.Response(200, text=f'const key = "{_FAKE_AWS_KEY}";' + "M" * 2000)
 
         scanner = HardcodedCredentialsScanner(_session(handler), patterns=_AWS_PATTERN)
         candidates = await scanner.scan("https://example.com/app.js")

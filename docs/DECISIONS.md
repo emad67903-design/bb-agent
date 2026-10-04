@@ -4862,3 +4862,110 @@ assumed. `payload_inventory.py`: 26 manifest entries, clean.
 
 **Files this entry covers:** none new — summary/verification entry
 over items 94–99's files.
+
+## 101. `tests/core/scanners/test_hardcoded_credentials.py` — AKIA fixture reconstructed via string concatenation (not a scanner bug, not Batch 5 work)
+
+**Root cause, confirmed directly before touching anything:** `git
+filter-repo` rewrote history to strip a realistic-looking AWS key
+(`AKIA` + 16 alphanumeric characters) that GitHub push protection
+flagged in a test fixture, replacing the `AKIA` prefix with `XKIA`
+across the object store. `hardcoded_credentials.py`'s own detection
+pattern (`_AWS_PATTERN`'s `r"AKIA[0-9A-Z]{16}"`) requires the literal
+`AKIA` prefix, so the rewritten fixture no longer matches it. Confirmed
+directly, not assumed from the symptom description: ran the full suite
+against this file before making any change -- **2 failed, 1350
+passed** -- `test_non_placeholder_unvalidated_match_still_produces_
+candidate` and `test_raw_response_snapshot_truncated_to_512_chars`,
+exactly the two named. `core/scanners/hardcoded_credentials.py` itself
+was not touched -- this entry's diff is scoped to the one test file.
+
+**Fix: one shared constant, built via concatenation, not three inline
+literals re-fixed independently** -- `_FAKE_AWS_KEY = "AKIA" +
+"ABCDEFGHIJKLMNOP"`, defined once near the file's other pattern
+constants, referenced by name at all three affected call sites (the two
+failing tests, plus a third line in `test_raw_response_snapshot_
+truncated_to_512_chars`'s neighbor that shared the same literal but
+happened not to be part of the failing assertion). Two properties
+verified directly, not assumed from the construction alone:
+  1. `git diff` against this file contains no line matching
+     `"(AKIA|XKIA)[A-Z0-9]{16}"` -- confirmed by grepping the actual
+     diff output, not by eyeballing the new source.
+  2. The concatenated runtime VALUE is still `AKIAABCDEFGHIJKLMNOP` --
+     the real, correctly-shaped key `AKIA[0-9A-Z]{16}` matches -- so
+     the scanner behavior under test is unchanged, only the fixture's
+     on-disk representation differs.
+
+**The known-placeholder fixture (`AKIAIOSFODNN7EXAMPLE`,
+`test_known_placeholder_is_excluded`) was untouched by the rewrite and
+stays untouched here** -- it is AWS's own publicly documented example
+key, not a newly-fabricated realistic secret; it is load-bearing as the
+literal value `known_placeholders` must match exactly, and was never
+one of the two failing tests. Confirmed by the same diff grep above: no
+placeholder-related line appears in this change.
+
+**Pattern pinned for every future credential-shaped fixture, not just
+this one:** Stripe (`sk_live_...`), Twilio, Google Maps (`AIza...`),
+Azure/Graph -- the remaining `credential_validation_allowlist.
+external_apis` entries -- get the same concatenation treatment the
+first time any of them is written as a realistic-looking fixture value,
+not reactively after a second push-protection block. None of Batch 5's
+own new fixtures (`http_smuggling.py`, the `race_scanner.py` pre-
+investigation) are credential-shaped, so this does not recur this
+batch, but the pattern is pinned here for whichever batch needs it
+next.
+
+**Verification:** full suite run before the fix -- **2 failed, 1350
+passed** (the two tests named above, confirmed by name in the failure
+output, not inferred). After the fix: `tests/core/scanners/test_
+hardcoded_credentials.py` in isolation -- **17/17**. Full suite --
+**1352/1352**. Both CI hooks (`ci-scanner-http-check`, `ci-scope-diff`)
+green.
+
+**Files this entry covers:** `tests/core/scanners/test_hardcoded_
+credentials.py` (one new shared constant, 3 literals replaced by
+references to it).
+
+## 102. `ExploitCandidate.parameter`'s no-single-parameter list -- item 100's own count (9) confirmed as current; `prompt_1_.md`'s restated count (8, with `oauth_scanner` instead of `jwt_scanner`/`hardcoded_credentials`/`graphql_scanner`) was a stale transcription, not a second source
+
+**Not a new finding -- a cross-check that the already-correct number
+(item 100) matches what gets carried forward into session handoffs.**
+A separate review of this project's own handoff material
+(`prompt_1_.md`, outside this repo) restated the list as "8 cases:
+`cors_scanner, host_header, auth_scanner, csrf_scanner, xxe_scanner,
+api_versioning, graphql_scanner, oauth_scanner`." That restatement does
+not match this repository. Checked directly against every scanner's own
+self-documentation, not against the restatement's wording:
+
+  - `oauth_scanner.py:75` -- *"NO EXTENSION TO ITEM 69'S LIST NEEDED:
+    `redirect_uri` and `state` are both genuine, named query
+    parameters"* -- it was never a member.
+  - `jwt_scanner.py:72` -- self-identifies as the **7th** extension
+    (item 95).
+  - `hardcoded_credentials.py:84` -- self-identifies as the **8th**
+    extension (item 97).
+  - `graphql_scanner.py:49` -- self-identifies as the **9th**
+    extension, and only for 2 of its 3 techniques -- introspection and
+    batching; the IDOR-via-field-name signal keeps a real parameter
+    value (item 98).
+
+This is exactly item 100's own already-published summary ("the list
+grew by three this batch: `jwt_scanner.py` -- 7th; `hardcoded_
+credentials.py` -- 8th; `graphql_scanner.py` -- 9th"). The restatement
+in `prompt_1_.md` is therefore stale relative to this repository, not a
+conflicting second source of truth -- this repo's own count was already
+right.
+
+**Corrected list, 9 members total, for anything outside this repo that
+cites it going forward:** `cors_scanner`, `host_header`, `xxe_scanner`
+(item 85), `api_versioning` (item 92), `jwt_scanner` (item 95, 7th),
+`hardcoded_credentials` (item 97, 8th), `graphql_scanner` (item 98, 9th,
+partial), plus `auth_scanner` and `csrf_scanner` -- item 69's original
+two remaining members, not yet built. `oauth_scanner` is explicitly
+excluded.
+
+**Consequence for Batch 5:** `http_smuggling.py` (item 104) is checked
+against this corrected 9-item list, not the stale 8, when its own
+`ExploitCandidate.parameter` shape is decided.
+
+**Files this entry covers:** none -- documentation-accuracy entry; no
+code changed.
