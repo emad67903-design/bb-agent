@@ -5156,3 +5156,123 @@ doesn't add new files to the manifest).
 `data/payloads/smuggling_configs.json` (stub -> 2 real entries),
 `data/payloads/http_smuggling_payloads.json` (stub -> 2 real entries),
 `tests/core/scanners/test_http_smuggling.py` (new, 19 tests).
+
+## 105. `race_scanner.py` pre-investigation -- `ExploitCandidate` gains `success_count`/`total_requests`; `race_scanner.py` itself NOT built this entry, pending approval
+
+**Scoped deliverable, same shape as item 81's `InteractshClient` pre-
+investigation ahead of Batch 2 -- the gap, the ontology fix, and the
+required test, submitted on their own before the scanner that will
+consume them.** Not a shortcut around the Week-ordering rule: the gap
+this closes was flagged explicitly at item 69 (`ExploitCandidate`'s own
+original design entry) and left open through every batch since,
+exactly as item 69 itself anticipated it would need to be closed by
+"the first later-batch scanner that hits this gap."
+
+**The gap, re-confirmed directly against the Go service's actual wire
+contract before writing anything, not assumed from the pre-
+investigation request's own wording:** `services/race_engine/race.go`'s
+`raceResponse` struct --
+
+```go
+type raceResponse struct {
+	Results      []raceResult `json:"results"`
+	SuccessCount int          `json:"success_count"`
+	Total        int          `json:"total"`
+}
+```
+
+-- carries two evidence outputs (Section 7.5: nanosecond timestamps
+plus `success_count`) that none of `ExploitCandidate`'s existing nine
+fields (item 69) can express. `payload_used`/`raw_response_snapshot`/
+`probe_correlation_id` are all `str | None`; `success_count`/`total`
+are counts, not strings, and packing two integers into a string field
+(`"3/30"`) would need to be unpacked again by every consumer (Section
+11.2's BeliefGraph pruning, any future reporter logic) -- the same
+"reaching for a dict/string instead of a typed field" failure mode item
+69 itself named as the thing to stop and flag rather than silently do.
+
+**Decision: two new optional fields on `ExploitCandidate` itself, in
+`core/ontology/findings.py` -- `success_count: int | None = None` and
+`total_requests: int | None = None`.** Not a new `RaceEvidence`
+sub-object, not a dict, not a tuple:
+  - Matches this class's own existing convention exactly --
+    `probe_correlation_id` is already "a field meaningful to a handful
+    of `vuln_type`s, `None` for the rest," and these two follow the
+    identical shape for the one `vuln_type` (`race`) that needs them.
+  - Keeps `ExploitCandidate` a single flat dataclass, consistent with
+    every other field on it and with this file's thin-dataclass
+    convention noted on `raw_response_snapshot` above (no nested
+    evidence object exists anywhere else in this class).
+  - A sub-object or dict was considered and rejected: it would be the
+    first non-flat field on this class, for no benefit over two plain
+    `int | None` fields -- two concurrently-correct counts, not a
+    variably-shaped structure.
+
+**Field name deliberately diverges from the Go wire field it reads --
+flagged explicitly, not silently matched:** the Go struct's field is
+`Total` (`json:"total"`). This ontology field is named
+`total_requests`, not `total`. Reasoning: `ExploitCandidate` is one
+shared class read by every one of the 29 (eventually) `vuln_type`s:
+`c.total` on a `race`-less context (BeliefGraph pruning logic, a
+reporter template) does not self-document what it counts, while
+`c.total_requests` does, consistent with this class's own existing
+preference for self-describing names over bare transcriptions of
+whatever the wire layer happened to call something (`detected_by`,
+`raw_response_snapshot`, and `probe_correlation_id` are all authored
+names, none copied verbatim from a Go/HTTP field name either).
+Consequence, recorded here so `race_scanner.py`'s own future author
+does not have to re-derive it: the one call site that constructs this
+candidate from the Go response needs an explicit rename --
+`total_requests=go_response["total"]` -- never a bare `**go_response`
+unpack, which would raise `TypeError` (`total` is not a keyword this
+dataclass accepts) rather than silently doing the wrong thing. Also
+recorded directly in the field's own docstring in `findings.py`, not
+only here.
+
+**`success_count` keeps its name unchanged** -- the Go field
+(`json:"success_count"`) and this ontology field agree exactly, no
+rename needed, confirmed by the same direct read of `race.go` above.
+
+**Required serialization round-trip test, delivered with this entry,
+not deferred to whenever `race_scanner.py` itself is built** (Engineering
+Constitution: "Every ontology dataclass/enum change gets a
+serialization round-trip test"): `tests/core/ontology/test_findings.py
+::TestExploitCandidate::test_race_fields_survive_a_dict_round_trip`,
+mirroring the existing `test_survives_a_dict_round_trip_via_isoformat`
+test's exact `dataclasses.asdict()` + isoformat convention, with
+`success_count=3, total_requests=30` as real, distinguishable values
+(not both `None`, which would pass trivially without proving the new
+fields round-trip at all). Plus two narrower unit tests:
+`test_race_fields_default_to_none` (every non-`race` candidate leaves
+both fields unset, same convention `probe_correlation_id` already
+established) and `test_race_fields_can_be_set_independently_of_other_
+optional_fields` (confirms these are genuinely separate fields, not a
+combined value, and do not disturb the three existing optional
+fields' own defaults).
+
+**Blast radius: zero on every existing scanner, confirmed by actually
+re-running the full suite, not assumed from the fields being
+optional-with-a-default:** full suite **1374/1374** (1371 + 3 new ontology
+tests) after this change -- every one of the 20 already-built scanners'
+own `ExploitCandidate(...)` construction calls omit these two new
+keyword-only-by-position fields and get `None` for both, exactly as
+every prior optional-field addition to this class has worked. Both CI
+hooks (`ci-scanner-http-check`, `ci-scope-diff`) still green;
+`payload_inventory.py` still 26 entries (this entry touches no payload
+file).
+
+**`race_scanner.py` itself is explicitly NOT built by this entry --
+pending approval, per the pre-investigation's own required shape:**
+this entry bundles only the gap, the two-field ontology fix, and the
+round-trip test, exactly as instructed ("Bundle and submit ONLY the
+pre-investigation, wait for approval. Write race_scanner.py only after
+approval."). The Go-sidecar access pattern `race_scanner.py` will need
+(item 103) is already documented and already proven working by
+`http_smuggling.py` (item 104), so once this ontology addition is
+approved, nothing else should block writing the scanner itself --
+flagged here so approval, not further investigation, is the only
+remaining gate.
+
+**Files this entry covers:** `core/ontology/findings.py` (two new
+fields + docstring), `tests/core/ontology/test_findings.py` (3 new
+tests). No scanner file. No `race_scanner.py`.

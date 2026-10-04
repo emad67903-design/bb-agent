@@ -382,6 +382,31 @@ class TestExploitCandidate:
         c = self._candidate(vuln_type="cmd_injection", parameter="cmd", probe_correlation_id="XBOW_sess123_ab12")
         assert c.probe_correlation_id == "XBOW_sess123_ab12"
 
+    def test_race_fields_default_to_none(self):
+        """docs/DECISIONS.md item 105 (race_scanner.py pre-investigation,
+        not yet built): success_count/total_requests exist for the
+        `race` vuln_type only; every other candidate leaves them unset,
+        same "None means not applicable" convention
+        test_batch_1_optional_fields_default_to_none already pins for
+        payload_used/raw_response_snapshot/probe_correlation_id."""
+        c = self._candidate()
+        assert (c.success_count, c.total_requests) == (None, None)
+
+    def test_race_fields_can_be_set_independently_of_other_optional_fields(self):
+        """Confirms success_count/total_requests are genuinely separate
+        fields, added at the end of the dataclass, not a tuple/combined
+        value, and do not disturb payload_used/raw_response_snapshot/
+        probe_correlation_id's own independent defaults."""
+        c = self._candidate(
+            vuln_type="race",
+            parameter=None,
+            success_count=3,
+            total_requests=30,
+        )
+        assert c.success_count == 3
+        assert c.total_requests == 30
+        assert (c.payload_used, c.raw_response_snapshot, c.probe_correlation_id) == (None, None, None)
+
     def test_equality_is_by_value_when_detected_at_matches(self):
         """Dataclass default __eq__ -- pinning this since detected_at's
         default_factory would otherwise make two "identical" candidates
@@ -432,3 +457,34 @@ class TestExploitCandidate:
         restored = ExploitCandidate(**restored_dict)
 
         assert restored == c
+
+    def test_race_fields_survive_a_dict_round_trip(self):
+        """Same round-trip convention as test_survives_a_dict_round_
+        trip_via_isoformat above, with success_count/total_requests set
+        to real, distinguishable (non-None, unequal-to-each-other)
+        values -- docs/DECISIONS.md item 105's own required round-trip
+        test for this ontology addition (Engineering Constitution), kept
+        as its own test rather than folded into the existing one so a
+        future failure specifically in these two new fields is
+        unambiguous about which addition broke, not just "the round-
+        trip test failed"."""
+        import dataclasses
+
+        fixed = datetime(2026, 9, 20, 9, 0, 0, tzinfo=timezone.utc)
+        c = self._candidate(
+            vuln_type="race",
+            parameter=None,
+            detected_at=fixed,
+            success_count=3,
+            total_requests=30,
+        )
+        as_dict = dataclasses.asdict(c)
+        as_dict["detected_at"] = as_dict["detected_at"].isoformat()
+
+        restored_dict = dict(as_dict)
+        restored_dict["detected_at"] = datetime.fromisoformat(restored_dict["detected_at"])
+        restored = ExploitCandidate(**restored_dict)
+
+        assert restored == c
+        assert restored.success_count == 3
+        assert restored.total_requests == 30

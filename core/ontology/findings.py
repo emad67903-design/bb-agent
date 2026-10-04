@@ -170,14 +170,50 @@ class ExploitCandidate:
             this signal (e.g. an XSS reflection string, a SQLi UNION
             probe). AUTHORED, Batch 1 only (docs/DECISIONS.md item 69):
             confirmed sufficient for xss/sqli/ssti/lfi/path_traversal
-            (Batch 1), none of which need count-based evidence. NOT yet
-            confirmed sufficient for Batches 2-7 -- Race's
-            `success_count`/`total` (Section 7.5) is already flagged as
-            a concrete case none of this class's three Batch-1 fields
-            can express; the first later-batch scanner that hits this
-            gap stops and flags it back rather than silently reaching
-            for a new field or a dict (docs/DECISIONS.md item 69,
-            per the Engineering Constitution's ontology-first rule).
+            (Batch 1), none of which need count-based evidence. RACE'S
+            GAP, FLAGGED HERE SINCE ITEM 69, NOW CLOSED (docs/
+            DECISIONS.md item 105): `race.go`'s `success_count`/`total`
+            (Section 7.5) could not be expressed by this class's three
+            Batch-1 fields, exactly as this entry predicted -- the
+            `success_count`/`total_requests` fields below are the
+            resolution, added by `race_scanner.py`'s own pre-
+            investigation (Engineering Constitution's ontology-first
+            rule: the field is added here, not reached for locally).
+            `race_scanner.py` itself is not yet built -- item 105 is a
+            pre-investigation only, pending approval -- these two
+            fields exist now so its eventual `__init__`/`scan` have a
+            settled contract to build against, matching item 81's
+            `InteractshClient` precedent (built ahead of its first
+            consuming scanner, not alongside it).
+        success_count: Race-condition evidence only (Section 7.5): the
+            Go race service's own `success_count` -- how many of
+            `total_requests` concurrent requests the service classified
+            as "successful" via its caller-supplied `success_status_
+            codes` allowlist (`race.go`'s `raceResponse.SuccessCount`,
+            confirmed against that file's actual field tag,
+            `json:"success_count"`, before this field was named). `None`
+            for every vuln_type except `race` -- same "`None` means not
+            applicable to this candidate" convention `probe_
+            correlation_id` below already established, not a new
+            pattern invented for this pair.
+        total_requests: Race-condition evidence only, paired with
+            `success_count` above: the total number of concurrent
+            requests fired for the race probe (`race.go`'s
+            `raceResponse.Total`). NAMED `total_requests`, NOT `total` --
+            A DELIBERATE DEPARTURE FROM THE GO WIRE FIELD'S OWN NAME,
+            FLAGGED FOR EXPLICIT CONFIRMATION, NOT ASSUMED: `race.go`'s
+            actual JSON tag is `json:"total"` (confirmed by reading
+            `services/race_engine/race.go` directly before writing this
+            field, not assumed from the name given in the pre-
+            investigation request). `total` alone, read on this class in
+            isolation -- across all 29 `vuln_type`s, not just `race` --
+            does not self-document what it counts; `total_requests`,
+            read the same way, does. `race_scanner.py` (deferred, not
+            built this batch) will need an explicit rename at the one
+            call site that maps `raceResponse.Total` into this field --
+            `total_requests=go_response["total"]`, never a bare pass-
+            through -- documented here so that call site does not
+            silently assume the names already match.
         raw_response_snapshot: Truncated response body backing the
             signal, same 512-character convention as `call_target()`'s
             `body_preview` (Section 10.7) and `race.go`'s `BodyPreview`
@@ -203,6 +239,8 @@ class ExploitCandidate:
     payload_used: str | None = None
     raw_response_snapshot: str | None = None
     probe_correlation_id: str | None = None
+    success_count: int | None = None
+    total_requests: int | None = None
 
 
 class TriageResult(str, Enum):
