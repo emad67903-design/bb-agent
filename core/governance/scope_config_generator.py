@@ -17,6 +17,14 @@ reader over the same file, same reasoning as `load_program_type`'s own
 addition note above: one place that knows how to read configs/scope.yaml,
 not a third parallel parser. Consumed by
 core/governance/scope_enforcer.py's `is_allowed()` exemption branch.
+
+Also implements (Week 7 Batch 5 addition, docs/DECISIONS.md item 106):
+Section 3's scope.yaml comment block's `race_parallel` field (R-L7 fix:
+"race_parallel is NOT in config.py -- source of truth is scope.yaml") --
+`load_race_parallel` below is a fourth reader over the same file, same
+reasoning as every addition above: one place that knows how to read
+configs/scope.yaml, not a fourth parallel parser. Consumed by
+core/scanners/race_scanner.py's constructor as its production default.
 Blueprint: bb_agent_v6.6_final_blueprint.md
 
 Reads configs/scope.yaml's `scope_domains` list and writes
@@ -207,6 +215,61 @@ def load_credential_validation_allowlist(scope_yaml_path: Path) -> CredentialVal
         )
 
     return CredentialValidationAllowlist(enabled=enabled, external_apis=list(external_apis))
+
+
+def load_race_parallel(scope_yaml_path: Path) -> int:
+    """Loads and validates the `race_parallel` field from scope.yaml.
+
+    Section 3's scope.yaml comment block (R-L7 fix): "race_parallel: 30
+    -- AUTHORITATIVE SOURCE for race_scanner.py's concurrency. Default
+    30; reduce to 5-10 for rate-sensitive targets. NOT duplicated in
+    config.py." This is the single, authoritative reader for that key --
+    `core/config.py` deliberately defines no `race_parallel` field at
+    all (confirmed by its own comment: "NOTE: race_parallel is NOT in
+    config.py -- source of truth is scope.yaml (R-L7 fix)"), so there is
+    no second place this value could come from.
+
+    Args:
+        scope_yaml_path: Path to configs/scope.yaml.
+
+    Returns:
+        The `race_parallel` integer value.
+
+    Raises:
+        ScopeConfigError: If the file is missing, is not valid YAML, has
+            no `race_parallel` key, or the value is not a positive
+            integer -- fail-closed, mirroring `load_program_type`'s
+            validation strictness. `bool` is explicitly rejected even
+            though Python's `bool` is an `int` subclass (`isinstance(True,
+            int)` is `True`): a YAML `race_parallel: true` must not
+            silently become `race_parallel: 1` instead of raising. Zero
+            or negative values are rejected because they describe zero
+            or a negative number of concurrent requests, which cannot
+            demonstrate a race condition (Section 7.5: "N concurrent
+            requests... success_count > 1... -> race detected" requires
+            N >= 2 to even be meaningful, but the actual floor enforced
+            here is the weaker, unambiguous ">0" -- Go's own
+            `defaultParallel = 30` fallback (confirmed in race.go) only
+            applies when the field is absent from the wire request
+            entirely, not when scope.yaml supplies a bad one; a bad
+            scope.yaml value must fail here, not silently fall through
+            to Go's unrelated absent-field default).
+    """
+    if not scope_yaml_path.is_file():
+        raise ScopeConfigError(f"scope.yaml not found at {scope_yaml_path}")
+
+    try:
+        raw: Any = yaml.safe_load(scope_yaml_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ScopeConfigError(f"scope.yaml is not valid YAML: {exc}") from exc
+
+    if not isinstance(raw, dict) or "race_parallel" not in raw:
+        raise ScopeConfigError(f"scope.yaml at {scope_yaml_path} has no 'race_parallel' key")
+
+    race_parallel = raw["race_parallel"]
+    if isinstance(race_parallel, bool) or not isinstance(race_parallel, int) or race_parallel <= 0:
+        raise ScopeConfigError("scope.yaml 'race_parallel' must be a positive integer")
+    return race_parallel
 
 
 def generate_scope_allowed_json(scope_yaml_path: Path, output_path: Path) -> ScopeGenerationResult:

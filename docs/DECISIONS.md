@@ -5276,3 +5276,153 @@ remaining gate.
 **Files this entry covers:** `core/ontology/findings.py` (two new
 fields + docstring), `tests/core/ontology/test_findings.py` (3 new
 tests). No scanner file. No `race_scanner.py`.
+
+## 106. `race_scanner.py` -- built, approved: advisor independently re-verified Batch 5's bundle (HEAD 997a14d0) in full, including a live Go toolchain (32/32), and explicitly authorized writing this scanner against the already-approved item 105 ontology and item 103 sidecar pattern
+
+**Both prerequisites item 105 named were already closed before this
+entry started, re-confirmed directly, not assumed from their own
+text:** item 2's `/race` wire contract approval ("Reviewed and APPROVED
+this session -- closed, not deferred to Batch 5") and item 105's two
+`ExploitCandidate` fields (`success_count`, `total_requests`). Nothing
+in this entry reopens either.
+
+**Division of labor matches `race.go`'s own header comment and item
+2's approval of it, not re-derived:** Go performs only transport-level
+work (fire `parallel` concurrent copies of one caller-supplied request,
+capture nanosecond timestamps, classify success via a caller-supplied
+`success_status_codes` allowlist); this file supplies the one request
+shape to replay and interprets the Go service's own pre-computed
+`success_count`/`total`. No target-response parsing happens in Python
+for this scanner, confirmed directly by a dedicated test
+(`test_self_session_receives_zero_requests`) that asserts the target-
+scoped `self.session` receives exactly zero requests during a scan --
+same proof shape `http_smuggling.py` (item 104) already established for
+its own sidecar, not merely asserted in prose this time either.
+
+**One payload template, not a per-variant set -- a deliberate departure
+from `http_smuggling.py`'s own two-variant precedent, flagged rather
+than silently copied:** Section 7.5 fires "N concurrent requests" -- one
+burst of one request repeated, not several different request shapes
+each tried N times the way CL.TE/TE.CL are two distinct techniques.
+`data/payloads/race_payloads.json` therefore holds exactly one entry
+(`generic_concurrent_replay`: method, headers, body,
+success_status_codes), read directly rather than hardcoded in Python,
+keeping the request shape config-driven without inventing a multi-
+variant structure this scanner's technique does not call for. The Fast
+Lane has no business-semantic knowledge of what `target_url` actually
+does (`BaseScanner.scan`'s only input) -- Section 7.5's own named
+example ("coupon redemption") is this template's illustrative instance,
+not a different template; Deep Lane's `BusinessLogicAgent` (Section 7.6)
+is where real business-aware race targets get supplied, not this
+scanner.
+
+**`race_parallel` sourced from `scope.yaml`, not `config.py` -- R-L7
+fix, read through the one existing module that owns that file, not a
+second parallel reader:** `core/governance/scope_config_generator.py`'s
+own docstring already states it "stays the single place that knows how
+to read configs/scope.yaml" (three readers already: `scope_domains`,
+`program_type`, `credential_validation_allowlist`). A fourth reader,
+`load_race_parallel(scope_yaml_path) -> int`, is added there (not
+inline in `race_scanner.py`), following the exact same
+fail-closed-validation shape as `load_program_type`. One real subtlety
+caught and tested, not assumed: Python's `bool` is an `int` subclass
+(`isinstance(True, int) is True`), so the validation explicitly rejects
+`bool` before the `int` check, otherwise a YAML `race_parallel: true`
+would silently become `race_parallel: 1` instead of raising. Zero and
+negative values are also rejected (fail-closed) independently of Go's
+own `defaultParallel = 30` fallback, which only applies when the field
+is absent from the wire request entirely -- a bad `scope.yaml` value
+must fail here, in Python, not silently fall through to Go's unrelated
+absent-field default. `race_scanner.py`'s own `race_parallel` constructor
+parameter defaults to this loader's result when not supplied, matching
+every other test-injectable/production-defaulted parameter in this
+codebase (`payloads`, `go_service_client`, both below).
+
+**How this scanner reaches its own Go sidecar -- item 103's mechanism,
+reused verbatim, not re-derived, per the advisor's own explicit
+instruction:** a second, independently-scoped `RateLimitedClient`
+(`go_service_client`), scoped to `127.0.0.1` only, for the one local hop
+to `race_engine:18080` -- `self.session` (target-scoped) has no
+localhost carve-out, same confirmed fact `http_smuggling.py` already
+established for `:18081`. `requests_per_second=100.0`, same reasoning
+and same number as `http_smuggling.py`'s identical default (a loopback
+call to this agent's own sidecar, not a politeness limit against a
+real target). Still "the one HTTP layer" -- no direct `httpx`/`requests`
+import in this file (`make ci-scanner-http-check`: green).
+
+**`ExploitCandidate.parameter = None` -- THE 11TH EXTENSION, against
+item 104's corrected 10-item count (9 per item 102, +1 for
+`http_smuggling.py` per item 104), not assumed from precedent without
+re-stating the count:** Section 7.5's signal is `success_count > 1`
+across N concurrent copies of one whole replayed request -- there is no
+single query parameter, body parameter, or header value that "is" the
+race condition the way, say, `host_header.py`'s `Host` header is. The
+entire replayed request, fired `race_parallel` times, is the payload;
+`payload_used` records this template's own `id`
+(`"generic_concurrent_replay"`) instead.
+
+**`http_method` read from the payload template, not hardcoded -- a
+deliberate departure from `http_smuggling.py`'s own hardcoded `"POST"`,
+flagged rather than silently copied:** `http_smuggling.py`'s method is
+fixed in Python because its two raw byte templates are themselves
+literal POST request lines with no separate field to read it from;
+`race_payloads.json`'s one entry carries an explicit `method` field
+(currently `"POST"`), so this scanner reads it rather than asserting a
+second, possibly-drifting copy of what the JSON already states.
+
+**Evidence-type classification is deliberately NOT this file's job --
+stated explicitly, not left for a reader to assume from the file's
+silence on it:** Section 7.5 names three evidence types for a confirmed
+race (`differential`, `timing_anomaly`, and a `replay_stable`/
+`timing_confirmed` choice, the latter's own threshold being
+`success_count >= 3` -- a DIFFERENT number from this file's own
+`success_count > 1` detection baseline, not to be confused with it).
+Deciding which evidence types apply is `core/verifier/evidence_chain.py`'s
+`build_evidence_chain()` job (Week 7's later verifier-layer deliverable,
+not yet built), exactly as `EvidenceChain.min_required`'s own docstring
+in `findings.py` already establishes for every vuln_type, not a new
+rule invented for this one. This scanner's job, like every other Fast
+Lane scanner, is only to decide whether a signal exists and to populate
+`success_count`/`total_requests` with the raw numbers that layer will
+need later.
+
+**`interactsh_client` -- not declared, not an omission:** Section 7.5
+names no OOB technique (Section 5.3's achievability matrix marks Race's
+`oob` column unavailable). Same precedent as `http_smuggling.py` (item
+104) and `crlf_injection.py` (item 88); confirmed directly via
+`inspect.signature` (`test_no_interactsh_client_parameter`).
+
+**Go-service-error handling -- `http_smuggling.py`'s own pattern (item
+104), reused, not reinvented:** a non-200 from `race_engine` is logged
+(`[RACE_GO_SERVICE_ERROR]`) and degrades to `[]`, not raised. A hard
+connection failure to the sidecar itself is not caught and propagates
+normally, matching every other scanner's unwrapped
+`self.session.request()` call.
+
+**Verification -- live-executed this entry, not relayed from a prior
+summary (the advisor's own standing rule, applied here to this
+scanner's own build, not only to the delivery bundle):**
+`tests/core/scanners/test_race_scanner.py` -- 15/15 (new).
+`tests/core/governance/test_scope_config_generator.py`'s new
+`TestLoadRaceParallel` class -- 10/10 (new). Full suite: **1399/1399**
+(1374 + 15 + 10). Both CI hooks green, each re-run through its own real
+`make` target, not a manually-reconstructed equivalent:
+`make ci-scanner-http-check` (root `Makefile`) and `make ci-scope-diff`
+(`services/Makefile` -- a prior turn this same entry was drafted in ran
+this from the wrong directory against the root `Makefile`, which does
+not define it; caught and re-run correctly before being recorded here,
+not left as a false "both green" claim). `payload_inventory.py`: still
+26 manifest entries, clean. `SCANNER_REGISTRY`: 22 entries (21 + this
+scanner), zero collisions, confirmed by importing all 22 scanner
+modules in one process. `core/scanners/base_scanner.py` and
+`core/scanners/registry.py`: `git diff --stat` empty -- untouched, per
+the advisor's own standing instruction to leave the shared interface
+alone. Go tests unaffected (no Go file touched this entry): `race_engine`
+16/16, `smuggling_engine` 16/16, re-run live, not assumed unchanged.
+
+**Files this entry covers:** `core/scanners/race_scanner.py` (new),
+`core/governance/scope_config_generator.py` (`load_race_parallel`
+added), `data/payloads/race_payloads.json` (stub -> 1 real entry),
+`tests/core/scanners/test_race_scanner.py` (new, 15 tests),
+`tests/core/governance/test_scope_config_generator.py`
+(`TestLoadRaceParallel`, 10 new tests).

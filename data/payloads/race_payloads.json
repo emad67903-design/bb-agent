@@ -2,6 +2,15 @@
   "_file_type": "injectable_payload",
   "_scanner": "race_scanner",
   "_notes": "Concurrent request templates",
-  "_status": "STUB -- Week 0 scaffolding per Section 3.1; real payloads added Week 7 alongside race_scanner",
-  "payloads": []
+  "_status": "Real payload added Week 7 Batch 5 (docs/DECISIONS.md item 106). Schema: id, method, headers, body, success_status_codes, description. Section 7.5 fires ONE burst of N identical concurrent requests -- not multiple variants the way http_smuggling.py tries CL.TE AND TE.CL -- so one entry is the complete, correct shape for this file, not a placeholder waiting for siblings. method/headers/body describe the single request race_scanner.py replays race_parallel times via race_engine; success_status_codes is this scanner's own explicit choice, passed to race.go's caller-supplied allowlist rather than relying on that service's own absent-field default (confirmed in race.go: defaults server-side to [200] only when the field is omitted entirely) -- supplying it here keeps the choice visible and auditable in this repo instead of silently inherited from Go.",
+  "payloads": [
+    {
+      "id": "generic_concurrent_replay",
+      "method": "POST",
+      "headers": {},
+      "body": "",
+      "success_status_codes": [200],
+      "description": "Section 7.5's detection technique is action-agnostic at the Fast Lane level -- BaseScanner.scan's only input is target_url, with no business-semantic hint about what the endpoint does (unlike Deep Lane's BusinessLogicAgent, Section 7.6, which has MentalModel context). This is the one generic request shape Fast Lane replays race_parallel times concurrently: an empty-body POST, classified successful on a plain 200. Section 7.5's own named example ('coupon redemption... Expected: 1 success') is one instance of this general shape, not a different template -- the detection condition (success_count > 1) is identical regardless of what the specific non-idempotent action turns out to be."
+    }
+  ]
 }

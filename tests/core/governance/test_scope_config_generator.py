@@ -13,6 +13,7 @@ from core.governance.scope_config_generator import (
     generate_scope_allowed_json,
     load_credential_validation_allowlist,
     load_program_type,
+    load_race_parallel,
     load_scope_domains,
 )
 from core.ontology.scope import CredentialValidationAllowlist
@@ -245,6 +246,70 @@ class TestLoadCredentialValidationAllowlist:
             "maps.googleapis.com",
             "graph.microsoft.com",
         ]
+
+
+class TestLoadRaceParallel:
+    """Week 7 Batch 5 (docs/DECISIONS.md item 106): Section 3's
+    scope.yaml comment block (R-L7 fix) -- consumed by
+    core/scanners/race_scanner.py's constructor as its production
+    default (race_parallel is NOT in config.py)."""
+
+    def test_loads_positive_integer(self, scope_yaml):
+        path = scope_yaml({"scope_domains": ["a.com"], "race_parallel": 30})
+        assert load_race_parallel(path) == 30
+
+    def test_loads_a_different_positive_integer(self, scope_yaml):
+        """Not just echoing the blueprint's own example value (30) --
+        confirms the function reads the real field, not a hardcoded
+        constant disguised as a loader."""
+        path = scope_yaml({"scope_domains": ["a.com"], "race_parallel": 7})
+        assert load_race_parallel(path) == 7
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(ScopeConfigError, match="not found"):
+            load_race_parallel(tmp_path / "does_not_exist.yaml")
+
+    def test_missing_race_parallel_key_raises(self, scope_yaml):
+        path = scope_yaml({"scope_domains": ["a.com"]})
+        with pytest.raises(ScopeConfigError, match="race_parallel"):
+            load_race_parallel(path)
+
+    def test_zero_raises_fail_closed(self, scope_yaml):
+        path = scope_yaml({"scope_domains": ["a.com"], "race_parallel": 0})
+        with pytest.raises(ScopeConfigError, match="positive integer"):
+            load_race_parallel(path)
+
+    def test_negative_raises_fail_closed(self, scope_yaml):
+        path = scope_yaml({"scope_domains": ["a.com"], "race_parallel": -5})
+        with pytest.raises(ScopeConfigError, match="positive integer"):
+            load_race_parallel(path)
+
+    def test_bool_raises_despite_being_an_int_subclass(self, scope_yaml):
+        """Python's bool is an int subclass (isinstance(True, int) is
+        True) -- a YAML `race_parallel: true` must not silently become
+        `race_parallel: 1`."""
+        path = scope_yaml({"scope_domains": ["a.com"], "race_parallel": True})
+        with pytest.raises(ScopeConfigError, match="positive integer"):
+            load_race_parallel(path)
+
+    def test_non_int_raises(self, scope_yaml):
+        path = scope_yaml({"scope_domains": ["a.com"], "race_parallel": "thirty"})
+        with pytest.raises(ScopeConfigError, match="positive integer"):
+            load_race_parallel(path)
+
+    def test_malformed_yaml_raises(self, tmp_path):
+        path = tmp_path / "scope.yaml"
+        path.write_text("race_parallel: [unclosed", encoding="utf-8")
+        with pytest.raises(ScopeConfigError, match="not valid YAML"):
+            load_race_parallel(path)
+
+    def test_real_scope_yaml_loads_thirty(self):
+        """Sanity check against this repo's actual configs/scope.yaml --
+        Section 3's comment block's own documented default."""
+        from pathlib import Path
+
+        real_path = Path(__file__).parent.parent.parent.parent / "configs" / "scope.yaml"
+        assert load_race_parallel(real_path) == 30
 
 
 class TestGenerateScopeAllowedJson:
